@@ -28,6 +28,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description=help_message)
     parser.add_argument('-i', '--input', help='Input file', required=True)
     parser.add_argument('-o', '--output', help='Output file', required=True)
+    parser.add_argument('-add', '--add_mask', help='Boolean to add the mask to the table', required=True, default=True)
     parser.add_argument('-nf', '--neighbors_file', help='Neighbors file for the l1 and tdscan', required=True)
     parser.add_argument('-l1', '--l1_threshold', help='Threshold for the l1 trigger', required=True, type=int)
     parser.add_argument('-epsl1', '--epsl1', help='Use flower (1) or superflower (2) for digital sum', required=True, type=int)
@@ -46,17 +47,29 @@ def main():
     eps_t = args.epst
     min_pts = args.min_pts
     trigger_type = args.trigger_type
+    add_mask = args.add_mask
 
     output_dir = os.path.dirname(out_table)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
         logger.info(f"Created output directory: {output_dir}")
 
-    l1_list, tdscan_list, trigger_patches = get_neighbors_info(neighbors_file, epsl1)
+    l1_array, tdscan_list = get_neighbors_info(neighbors_file, epsl1)
+    if epsl1==2:
+        l1_mask = (l1_array >= 0).astype(int)
+    else:
+        l1_mask = None
     trigtable = get_table(simtel_file)
     n_events = len(trigtable)
-    l1_trigger, trigger_mask = [], []
+    l1_trigger, trig_per_sample = [], []
     logger.info("Processing the data...")
+
+    packed_masks = None
+    n_pixels = None
+    n_times = None
+    bits = None
+    packed_len = None
+    bitorder = "big"
 
     with tables.open_file(simtel_file, 'r') as h5file:
         for i, row in enumerate(trigtable):
@@ -65,16 +78,63 @@ def main():
             tel_path = f'/r0/event/telescope/tel_{tel_id:03d}'
             wf = h5file.get_node(tel_path)[table_idx]['waveform']
 
-            trig, bin_flowers = apply_low_trigger(wf, l1_list, l1_threshold, tdscan_list, eps_t, min_pts, trigger_type, trigger_patches)
+            trig, trig_p_sample, bin_flowers = apply_low_trigger(wf, l1_array, l1_threshold, tdscan_list, eps_t, min_pts, trigger_type, l1_mask)
             l1_trigger.append(trig)
-            trigger_mask.append(bin_flowers.astype(bool))
+            trig_per_sample.append(trig_p_sample)
+
+            if add_mask == "True":
+                bf = np.asarray(bin_flowers, dtype=np.uint8)  # shape (n_pixels, n_times)
+                # En la primera iteración conocemos las dimensiones y preallocamos packed_masks
+                if packed_masks is None:
+                    n_pixels, n_times = bf.shape
+                    bits = n_pixels * n_times
+                    packed_len = (bits + 7) // 8
+                    packed_masks = np.zeros((n_events, packed_len), dtype=np.uint8)
+
+                # Flatten y packbits
+                flat = bf.ravel(order="C")        # 0/1 flat
+                p = np.packbits(flat, bitorder=bitorder)
+                # Padding por seguridad
+                if p.size < packed_len:
+                    temp = np.zeros(packed_len, dtype=np.uint8)
+                    temp[: p.size] = p
+                    p = temp
+                elif p.size > packed_len:
+                    # Esto no debería pasar, pero por seguridad truncar
+                    p = p[:packed_len]
+                packed_masks[i, :] = p
 
             if i % 1000 == 0:
                 logger.info(f"{i}/{n_events} events processed.")
 
     trigtable.add_column(l1_trigger, name="low_trigger")
-    trigtable.add_column(trigger_mask, name="trigger_mask")
+    trigtable.add_column(trig_per_sample, name="trigger_per_sample")
+    if add_mask=="True":
+        if packed_masks is None:
+            raise RuntimeError("add_mask=True pero no se generó ningún mask (packed_masks is None).")
+        # Añadimos la columna empaquetada (uint8 2D)
+        trigtable.add_column(packed_masks, name="trigger_mask")
+    else:
+        logger.info("add_mask not set to True: no trigger_mask column will be added.")
+
     trigtable.write(out_table, path='/table', format='hdf5', overwrite=True)
+
+    if add_mask == "True":
+        try:
+            with tables.open_file(out_table, mode='a') as hf:
+                if hasattr(hf.root, "table"):
+                    node = hf.root.table
+                else:
+                    # por si la estructura cambia, intentar encontrar el node '/table'
+                    node = hf.get_node('/table')
+                node._v_attrs.trigger_mask_shape = np.array([int(n_pixels), int(n_times)], dtype=np.int32)
+                node._v_attrs.trigger_mask_bits = int(bits)
+                node._v_attrs.trigger_mask_packed_len = int(packed_len)
+                node._v_attrs.trigger_mask_bitorder = bitorder
+                logger.info("Wrote trigger_mask attributes to HDF5 (shape, bits, packed_len, bitorder).")
+        except Exception as e:
+            logger.warning(f"Failed to write HDF5 attributes for trigger_mask: {e}")
+            
     logger.info("Trigger finished")
     
 def get_neighbors_info(neighbors_file, epsl1):
@@ -84,7 +144,6 @@ def get_neighbors_info(neighbors_file, epsl1):
         fl_neighbor_array_tdscan = f.root.neighbors.flower_neighbors_tdscan[:]
         fl_neighbor_array_l1 = f.root.neighbors.flower_neighbors_l1[:]
         supfl_neighbor_array_l1 = f.root.neighbors.superflower_neighbors_l1[:]
-        trigger_patches = f.root.patches.masks[:]
         # Remove -1 padding from each row
         neighbor_tdscan_eps1_list = [row[row != -1].tolist() for row in fl_neighbor_array_tdscan]
         fl_neighbor_l1_list = [row[row != -1].tolist() for row in fl_neighbor_array_l1]
@@ -93,12 +152,12 @@ def get_neighbors_info(neighbors_file, epsl1):
     l1_list = (
         fl_neighbor_l1_list 
         if epsl1 == 1 
-        else supfl_neighbor_l1_list
+        else supfl_neighbor_array_l1
     )
 
-    return l1_list, neighbor_tdscan_eps1_list, trigger_patches
+    return l1_list, neighbor_tdscan_eps1_list
 
-def apply_low_trigger(x, l1_list, l1_threshold, tdscan_list, eps_t, min_pts, trigger_type, trigger_patches):
+def apply_low_trigger(x, l1_list, l1_threshold, tdscan_list, eps_t, min_pts, trigger_type, l1_mask):
     """
     Apply a low level trigger to the raw waveform.
 
@@ -131,11 +190,12 @@ def apply_low_trigger(x, l1_list, l1_threshold, tdscan_list, eps_t, min_pts, tri
     x = x[:, int(init) : int(stop)]
     time = x.shape[1]
     # Assign the l1 neighbor list, summing on flowers or superflowers for each flower.
+    if l1_mask is not None:
+        vals = x[l1_list] 
+        flower_sums = (vals * l1_mask[..., None]).sum(axis=1)
+    else:
+        flower_sums = x[np.array(l1_list)].sum(axis=1)
 
-    flower_sums = np.array(
-        [np.sum(x[l1_list[i]], axis=0) 
-        for i in np.arange(0, len(l1_list))]
-    )
     # Thresholding (broadcast back to each pixel in group)
     bin_flowers = (flower_sums > l1_threshold).astype(int)  # shape: (n_flowers, time)
     # TDSCAN mask cleaning:
@@ -163,17 +223,20 @@ def apply_low_trigger(x, l1_list, l1_threshold, tdscan_list, eps_t, min_pts, tri
         bin_flowers = tdscan_flowers # shape: (n_flowers, time)
 
     trigger = int(np.any(bin_flowers))
-    return trigger, bin_flowers
+    trigger_per_sample = bin_flowers.any(axis=0).astype(int)
+
+    return trigger, trigger_per_sample, bin_flowers
 
 def get_table(input_file, tel_ids=[1, 2, 3, 4]):
     """
-    Crea una tabla con todos los eventos de R0 para los telescopios indicados.
-    No filtra ni hace joins con imágenes, solo mantiene los datos de R0.
+    Crea una tabla con todos los eventos para los telescopios indicados.
+    Verifica que la tabla de r0 tenga los mismos eventos que la de simulación.
     """
     tel_tables = []
 
     for tel_id in tel_ids:
         wf_path = f"/r0/event/telescope/tel_{tel_id:03d}"
+        sim_path = f"/simulation/event/telescope/images/tel_{tel_id:03d}"
 
         logger.info(f"Reading R0 data for tel_{tel_id:03d} from {wf_path}")
         try:
@@ -181,18 +244,38 @@ def get_table(input_file, tel_ids=[1, 2, 3, 4]):
         except Exception as e:
             logger.warning(f"  -> Failed to read R0 table for tel_{tel_id:03d}: {e}")
             continue
+        logger.info(f"Reading sim data for tel_{tel_id:03d} from {sim_path}")
+        try:
+            sim = read_table(input_file, sim_path)
+        except Exception as e:
+            logger.warning(f"  -> Failed to read simulation table for tel_{tel_id:03d}: {e}")
+            continue
 
         if len(r0) == 0:
             logger.warning(f"  -> R0 table for tel_{tel_id:03d} is empty, skipping")
             continue
 
         logger.info(f"  -> {len(r0)} rows in R0 table for tel_{tel_id:03d}")
+        logger.info(f"  -> {len(sim)} rows in sim table for tel_{tel_id:03d}")
+
+        if len(r0) != len(sim):
+            raise ValueError(f"Simulation table and r0 table have not the same length for tel_{tel_id:03d}")
+        if len(np.unique(r0["event_id"])) != len(r0):
+            raise ValueError(f"R0 table has duplicated events for tel_{tel_id:03d}")
+        if len(np.unique(sim["event_id"])) != len(sim):
+            raise ValueError(f"Sim table has duplicated events for tel_{tel_id:03d}")
+        if not np.array_equal(np.sort(r0["event_id"]), np.sort(sim["event_id"])):
+            raise ValueError(f"Mismatch in event_ids between R0 and Sim tables for tel_{tel_id:03d}")
 
         # Añadir columna de índice para cada fila
-        r0 = r0["obs_id", "event_id", "tel_id"]
-        r0.add_column(np.arange(len(r0)), name="table_index", index=0)
+        sim = sim["obs_id", "event_id", "tel_id", "true_image_sum"]
+        sim.add_column(np.arange(len(sim)), name="table_index", index=0)
 
-        tel_tables.append(r0)
+        tel_tables.append(sim)
+        # r0 = r0["obs_id", "event_id", "tel_id"]
+        # r0.add_column(np.arange(len(r0)), name="table_index", index=0)
+
+        # tel_tables.append(r0)
 
     if len(tel_tables) == 0:
         logger.error("No valid telescope R0 tables were loaded!")
@@ -201,7 +284,7 @@ def get_table(input_file, tel_ids=[1, 2, 3, 4]):
     logger.info("Stacking all telescope R0 tables")
     full_data = vstack(tel_tables)
     full_data.sort(['obs_id', 'event_id', 'tel_id'])
-    logger.info(f"Full R0 table has {len(full_data)} rows and columns: {full_data.colnames}")
+    logger.info(f"Full table has {len(full_data)} rows and columns: {full_data.colnames}")
 
     return full_data
 

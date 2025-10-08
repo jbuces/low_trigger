@@ -1,0 +1,29 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# --- Entornos virtuales ---
+.env/
+.venv/
+venv/
+env/
+
+# --- Archivos temporales ---
+*.log
+*.tmp
+
+# --- Jupyter / VSCode ---
+.ipynb_checkpoints/
+.vscode/
+
+# --- Cache pytest ---
+.pytest_cache/
+
+# --- Archivos del sistema ---
+.DS_Store
+Thumbs.db
+
+# --- Archivos que sí queremos mantener ---
+# (No ignoramos los .h5)

@@ -317,19 +317,20 @@ def get_ctlearn_nsb_threshold(per_event_table, freqs_kHz, apply_tdscan = False, 
 
     return thr_values
 
-def plot_trigger_efficiency(tables, names, thresholds, tdscans, apply_tdscan,  pe_min=20, pe_max=250, pe_bin_width=10):
+def plot_trigger_efficiency(tables, names, thresholds, tdscans, apply_tdscan, get_ratio=None, pe_min=20, pe_max=250, pe_bin_width=10):
     # Define PE bins
     bins = np.arange(pe_min, pe_max + pe_bin_width, pe_bin_width)
     bin_centers = bins[:-1] + pe_bin_width / 2
+    eff_list = []
     plt.figure(figsize=(11,7))
     for i, table in enumerate(tables):
         # Event PEs
         pes = np.array(table["cherenkov_pe"])
         if tdscans[i] == True or apply_tdscan[i]==True:
             tdscan_preds = np.array(table["low_trigger"])
-   
-        preds = np.array(table["prediction"])
-        triggered = preds <= thresholds[i]
+        else:
+            preds = np.array(table["prediction"])
+            triggered = preds <= thresholds[i]
 
         # efficiency per bin
         eff = []
@@ -348,6 +349,7 @@ def plot_trigger_efficiency(tables, names, thresholds, tdscans, apply_tdscan,  p
                     eff.append(triggered[mask].sum() / total)
             
         eff = np.array(eff)
+        eff_list.append(eff)
 
         # Plot
 
@@ -363,5 +365,56 @@ def plot_trigger_efficiency(tables, names, thresholds, tdscans, apply_tdscan,  p
     plt.legend()
     plt.show()
 
+    if get_ratio is not None and isinstance(get_ratio, int) and 0 <= get_ratio < len(eff_list):
+        ref_eff = eff_list[get_ratio]
+        plt.figure(figsize=(11,7))
+        for i, eff in enumerate(eff_list):
+            if i == get_ratio:
+                continue  # no hacemos ratio con la misma
+            ratio = np.divide(eff, ref_eff, out=np.zeros_like(eff), where=ref_eff!=0)
+            plt.plot(bin_centers, ratio, label=f'{names[i]} / {names[get_ratio]}')
+
+        plt.xlabel("Total pe per event")
+        plt.ylabel("Efficiency ratio")
+        plt.title(f"Efficiency ratio (reference: {names[get_ratio]})")
+        plt.grid(True)
+        plt.legend()
+        plt.show()
+
     return bin_centers, eff
 
+
+def get_merged_trigger_tables(files, path="/table"):
+    all_tables = []
+    columns = ['table_index', 'obs_id', 'event_id',	'tel_id', 'true_image_sum', 'low_trigger', 'trigger_per_sample'] 
+
+    for file_index, file_path in enumerate(files):
+        with tables.open_file(file_path, mode='r') as f:
+            if not f.__contains__("/table"):
+                print(f"/table not found in {file_path}")
+                continue
+
+            node = f.get_node("/table")
+
+            # Extract columns
+            data = {col: node.col(col) for col in columns}
+
+            # Add file index column
+            data["file_index"] = np.full(len(node), file_index, dtype=np.int32)
+
+            # Build your Table object (same structure as you already use)
+            tab = Table(data)
+            all_tables.append(tab)
+
+    if not all_tables:
+        raise ValueError("No valid /table found in the provided files.")
+
+    # Stack them vertically
+    stacked = vstack(all_tables)
+    return stacked
+
+def get_l1_tdscan_output_freq(table):
+    lt = table["low_trigger"]
+    eff = np.sum(lt) / len(lt)
+    out_freq = eff / 30 * 10**(6)
+    print(f"On {len(lt)} nsb events, we get an output frequency from accidental triggers of {out_freq} kHz")
