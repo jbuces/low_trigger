@@ -5,9 +5,7 @@ Module for extracting and combining statistics from TDSCAN L1 files
 and CTLearn output files.
 """
 
-# ==============================
-# Imports
-# ==============================
+
 import numpy as np
 import h5py
 import matplotlib.pyplot as plt
@@ -15,9 +13,7 @@ from astropy.table import Table, join, vstack
 import tables
 from pathlib import Path
 
-# ==============================
-# Functions
-# ==============================
+
 def get_per_patch_prediction_table(ctlearn_files_path):
     if isinstance(ctlearn_files_path, str):
         ctlearn_files_path = [ctlearn_files_path]
@@ -189,7 +185,13 @@ def get_ctlearn_per_event_table(ctlearn_file_paths, nsb=False):
     for ctlearn_file_path in ctlearn_file_paths:
         with tables.open_file(ctlearn_file_path, mode="r") as f:
             all_tel_tables = []
-
+            energy_path = "/simulation/event/subarray/shower"
+            energy_table = f.get_node(energy_path)
+            energy_tab = Table({
+                "obs_id": energy_table.col("obs_id"),
+                "event_id": energy_table.col("event_id"),
+                "true_energy": energy_table.col("true_energy")
+            })
             for i in range(1, 5):
                 # problemas cn los files de nsb y no tienen cherenkov_pe asi que
                 if nsb == False:
@@ -204,7 +206,7 @@ def get_ctlearn_per_event_table(ctlearn_file_paths, nsb=False):
                         "obs_id": image_table.col("obs_id"),
                         "event_id": image_table.col("event_id"),
                         "tel_id": image_table.col("tel_id"),
-                        "cherenkov_pe": image_table.col("true_image_sum"),
+                        "cherenkov_pe": image_table.col("true_image_sum")
                     })
 
                 # ---- Predicciones ----
@@ -250,15 +252,16 @@ def get_ctlearn_per_event_table(ctlearn_file_paths, nsb=False):
                         keys=["obs_id", "event_id", "tel_id"],
                         join_type="inner"
                     )
-                
+                pred_per_event = join(
+                    left=pred_per_event,
+                    right=energy_tab,
+                    keys=["obs_id", "event_id"],
+                )
+                pred_per_event.sort(['obs_id', 'event_id', 'tel_id'])
+
                 # Raise errors in case of a corrupted file
                 if np.any(np.isnan(pred_per_event["predictions"])) or np.any(np.isnan(pred_per_event["prediction"])):
                     raise ValueError("NaN detected in predictions or prediction column")
-
-                # unique_ids = np.unique(pred_per_event["event_id"])
-                
-                # if len(unique_ids) != len(pred_per_event["event_id"]):
-                #     raise ValueError("Duplicate event_id detected")
 
                 all_tel_tables.append(pred_per_event)
 
@@ -326,8 +329,12 @@ def plot_trigger_efficiency(tables, names, thresholds, tdscans, apply_tdscan, ge
     for i, table in enumerate(tables):
         # Event PEs
         pes = np.array(table["cherenkov_pe"])
-        if tdscans[i] == True or apply_tdscan[i]==True:
+        if tdscans[i] == True:
             tdscan_preds = np.array(table["low_trigger"])
+        elif apply_tdscan[i]==True:
+            tdscan_preds = np.array(table["low_trigger"])
+            preds = np.array(table["prediction"])
+            triggered = preds <= thresholds[i]
         else:
             preds = np.array(table["prediction"])
             triggered = preds <= thresholds[i]
@@ -351,15 +358,12 @@ def plot_trigger_efficiency(tables, names, thresholds, tdscans, apply_tdscan, ge
         eff = np.array(eff)
         eff_list.append(eff)
 
-        # Plot
-
         plt.plot(bin_centers, eff, marker='', label=f'{names[i]}')
         plt.xlabel("Total pe per event")
         plt.ylabel("Trigger efficiency")
         plt.title(f"Trigger efficiency vs pe")
         plt.yscale('log')
         
-        plt.ylim(0.01, 1.05)
         plt.grid(True)
 
     plt.legend()
@@ -369,8 +373,8 @@ def plot_trigger_efficiency(tables, names, thresholds, tdscans, apply_tdscan, ge
         ref_eff = eff_list[get_ratio]
         plt.figure(figsize=(11,7))
         for i, eff in enumerate(eff_list):
-            if i == get_ratio:
-                continue  # no hacemos ratio con la misma
+            # if i == get_ratio:
+            #     continue  # no hacemos ratio con la misma
             ratio = np.divide(eff, ref_eff, out=np.zeros_like(eff), where=ref_eff!=0)
             plt.plot(bin_centers, ratio, label=f'{names[i]} / {names[get_ratio]}')
 
@@ -383,10 +387,87 @@ def plot_trigger_efficiency(tables, names, thresholds, tdscans, apply_tdscan, ge
 
     return bin_centers, eff
 
+def plot_trigger_efficiency_energy(tables, names, thresholds, tdscans, apply_tdscan, get_ratio=None, e_min=10, e_max=1e4, e_bin_width=0.1, log_bins=True, ymin=0.01):
+    """
+    Plot trigger efficiency vs true energy (in TeV).
+    """
 
-def get_merged_trigger_tables(files, path="/table"):
+    # Definir bins de energía (logarítmicos o lineales)
+    if log_bins:
+        bins = np.logspace(np.log10(e_min), np.log10(e_max), int(np.log10(e_max/e_min)/np.log10(1+e_bin_width)) + 1)
+        bin_centers = np.sqrt(bins[:-1] * bins[1:])  
+    else:
+        bins = np.arange(e_min, e_max + e_bin_width, e_bin_width)
+        bin_centers = bins[:-1] + e_bin_width / 2
+
+    eff_list = []
+    plt.figure(figsize=(11,7))
+
+    for i, table in enumerate(tables):
+        energies = np.array(table["true_energy"]) * 1e3   # En GeV
+        if tdscans[i]:
+            tdscan_preds = np.array(table["low_trigger"])
+        elif apply_tdscan[i]:
+            tdscan_preds = np.array(table["low_trigger"])
+            preds = np.array(table["prediction"])
+            triggered = preds <= thresholds[i]
+        else:
+            preds = np.array(table["prediction"])
+            triggered = preds <= thresholds[i]
+
+        eff = []
+        for low, high in zip(bins[:-1], bins[1:]):
+            mask = (energies >= low) & (energies < high)
+            total = mask.sum()
+            if total == 0:
+                eff.append(0)
+            else:
+                if tdscans[i]:
+                    eff.append(tdscan_preds[mask].sum() / total)
+                elif apply_tdscan[i]:
+                    eff.append(((triggered & (tdscan_preds == 1))[mask]).sum() / total)
+                else:
+                    eff.append(triggered[mask].sum() / total)
+
+        eff = np.array(eff)
+        eff_list.append(eff)
+
+        plt.plot(bin_centers, eff, marker='', label=f'{names[i]}')
+
+    plt.xlabel("True energy [GeV]")
+    plt.ylabel("Trigger efficiency")
+    plt.title("Trigger efficiency vs True energy")
+    if log_bins:
+        plt.xscale('log')
+    plt.ylim(ymin, 1.05)  
+    plt.yscale('log')
+    plt.grid(True, which="both")
+    plt.legend()
+    plt.show()
+
+    # Ratio respecto a una referencia
+    if get_ratio is not None and isinstance(get_ratio, int) and 0 <= get_ratio < len(eff_list):
+        ref_eff = eff_list[get_ratio]
+        plt.figure(figsize=(11,7))
+        for i, eff in enumerate(eff_list):
+            ratio = np.divide(eff, ref_eff, out=np.zeros_like(eff), where=ref_eff != 0)
+            plt.plot(bin_centers, ratio, label=f'{names[i]} / {names[get_ratio]}')
+
+        plt.xlabel("True energy [TeV]")
+        plt.ylabel("Efficiency ratio")
+        plt.title(f"Efficiency ratio (reference: {names[get_ratio]})")
+        if log_bins:
+            plt.xscale('log')
+        plt.grid(True, which="both")
+        plt.legend()
+        plt.show()
+
+    return bin_centers, eff
+
+
+
+def get_merged_trigger_tables(files, path="/table", columns = ['table_index', 'obs_id', 'event_id',	'tel_id', 'true_image_sum', 'low_trigger', 'trigger_per_sample', 'true_energy']):
     all_tables = []
-    columns = ['table_index', 'obs_id', 'event_id',	'tel_id', 'true_image_sum', 'low_trigger', 'trigger_per_sample'] 
 
     for file_index, file_path in enumerate(files):
         with tables.open_file(file_path, mode='r') as f:
@@ -413,8 +494,25 @@ def get_merged_trigger_tables(files, path="/table"):
     stacked = vstack(all_tables)
     return stacked
 
-def get_l1_tdscan_output_freq(table):
-    lt = table["low_trigger"]
-    eff = np.sum(lt) / len(lt)
-    out_freq = eff / 30 * 10**(6)
-    print(f"On {len(lt)} nsb events, we get an output frequency from accidental triggers of {out_freq} kHz")
+def get_l1_tdscan_output_freq(tables, titles):
+    models = []
+    out_rates = []
+    n_nsb_events = []
+
+    for i, table in enumerate(tables):
+        lt = table["low_trigger"]
+        eff = np.sum(lt) / len(lt)
+        out_freq = eff / 30 * 10**6  # en kHz
+        n_nsb = len(lt)
+
+        models.append(titles[i])
+        out_rates.append(round(out_freq, 2))
+        n_nsb_events.append(n_nsb)
+        print(f"For the {titles[i]}, on {len(lt)} nsb events, we get an output frequency from accidental triggers of {out_freq} kHz")
+
+    result_table = Table(
+        [models, out_rates, n_nsb_events],
+        names=("Model", "Output Rate (kHz)", "Number of NSB events")
+    )
+
+    return result_table

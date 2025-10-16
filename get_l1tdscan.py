@@ -7,6 +7,7 @@ import tables
 from ctapipe.io import read_table
 from astropy.table import Table, join, vstack
 import logging
+from numpy.lib.stride_tricks import sliding_window_view
 
 logging.basicConfig(
     level=logging.INFO,  
@@ -31,7 +32,7 @@ def parse_args():
     parser.add_argument('-add', '--add_mask', help='Boolean to add the mask to the table', required=True, default=True)
     parser.add_argument('-nf', '--neighbors_file', help='Neighbors file for the l1 and tdscan', required=True)
     parser.add_argument('-l1', '--l1_threshold', help='Threshold for the l1 trigger', required=True, type=int)
-    parser.add_argument('-epsl1', '--epsl1', help='Use flower (1) or superflower (2) for digital sum', required=True, type=int)
+    parser.add_argument('-epsl1', '--epsl1', help='Use flower (1) or superflower (2) for digital sum, (3) for non overlapping superflowers (modules)', required=True, type=int)
     parser.add_argument('-trig', '--trigger_type', help='l1 for digital sum only, tdscan for tdscan algo on top', required=True, type=str, default="tdscan")
     parser.add_argument('-epst', '--epst', help='Frames before and after for tdscan', required=True, type=int)
     parser.add_argument('-pts', '--min_pts', help='Min pts for tdscan flower convolution', required=True, type=int)
@@ -55,7 +56,7 @@ def main():
         logger.info(f"Created output directory: {output_dir}")
 
     l1_array, tdscan_list = get_neighbors_info(neighbors_file, epsl1)
-    if epsl1==2:
+    if epsl1==2 or epsl1==3:
         l1_mask = (l1_array >= 0).astype(int)
     else:
         l1_mask = None
@@ -144,16 +145,25 @@ def get_neighbors_info(neighbors_file, epsl1):
         fl_neighbor_array_tdscan = f.root.neighbors.flower_neighbors_tdscan[:]
         fl_neighbor_array_l1 = f.root.neighbors.flower_neighbors_l1[:]
         supfl_neighbor_array_l1 = f.root.neighbors.superflower_neighbors_l1[:]
+        feb_neighbors = f.root.neighbors.feb_neighbors[:]
+        feb_indices = f.root.modules.indices[:]
         # Remove -1 padding from each row
         neighbor_tdscan_eps1_list = [row[row != -1].tolist() for row in fl_neighbor_array_tdscan]
         fl_neighbor_l1_list = [row[row != -1].tolist() for row in fl_neighbor_array_l1]
         supfl_neighbor_l1_list = [row[row != -1].tolist() for row in supfl_neighbor_array_l1]
 
-    l1_list = (
-        fl_neighbor_l1_list 
-        if epsl1 == 1 
-        else supfl_neighbor_array_l1
-    )
+    # l1_list = (
+    #     fl_neighbor_l1_list 
+    #     if epsl1 == 1 
+    #     else supfl_neighbor_array_l1
+    # )
+    if epsl1==1:
+        l1_list=fl_neighbor_array_l1
+    elif epsl1==2:
+        l1_list=supfl_neighbor_array_l1
+    else:
+        l1_list=feb_indices
+        neighbor_tdscan_eps1_list= feb_neighbors
 
     return l1_list, neighbor_tdscan_eps1_list
 
@@ -198,6 +208,13 @@ def apply_low_trigger(x, l1_list, l1_threshold, tdscan_list, eps_t, min_pts, tri
 
     # Thresholding (broadcast back to each pixel in group)
     bin_flowers = (flower_sums > l1_threshold).astype(int)  # shape: (n_flowers, time)
+    if trigger_type == "tdscan_perflower":
+        windows = sliding_window_view(bin_flowers, window_shape=min_pts, axis=1)
+        valid = np.all(windows == 1, axis=2)
+        triggered = np.zeros_like(bin_flowers)
+        for offset in range(min_pts):
+            triggered[:, offset:offset + valid.shape[1]] |= valid
+        bin_flowers=triggered
     # TDSCAN mask cleaning:
     if trigger_type == "tdscan":
         num_flowers = len(bin_flowers)
@@ -233,6 +250,14 @@ def get_table(input_file, tel_ids=[1, 2, 3, 4]):
     Verifica que la tabla de r0 tenga los mismos eventos que la de simulación.
     """
     tel_tables = []
+
+    energy_path = "/simulation/event/subarray/shower"
+    logger.info(f"Reading shower data from {energy_path}")
+    try:
+        energy_tab = read_table(input_file, energy_path)
+        energy_tab = energy_tab['obs_id', 'event_id', 'true_energy']
+    except Exception as e:
+        logger.warning(f"  -> Failed to read simulation table for tel_{tel_id:03d}: {e}")
 
     for tel_id in tel_ids:
         wf_path = f"/r0/event/telescope/tel_{tel_id:03d}"
@@ -283,6 +308,12 @@ def get_table(input_file, tel_ids=[1, 2, 3, 4]):
 
     logger.info("Stacking all telescope R0 tables")
     full_data = vstack(tel_tables)
+    logger.info("Merging all telescope tables with energy information.")
+    full_data = join(
+        left=full_data,
+        right=energy_tab,
+        keys=["obs_id", "event_id"],
+    )
     full_data.sort(['obs_id', 'event_id', 'tel_id'])
     logger.info(f"Full table has {len(full_data)} rows and columns: {full_data.colnames}")
 
