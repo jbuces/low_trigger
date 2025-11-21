@@ -263,6 +263,14 @@ def plot_trigger_efficiency_energy_camera(
     """
     Plot trigger efficiency vs true energy (in GeV).
     """
+    plt.rcParams.update({
+        "font.size": 16,       # tamaño base
+        "axes.titlesize": 16,  # títulos de cada eje
+        "axes.labelsize": 16,  # labels x/y
+        "xtick.labelsize": 13,
+        "ytick.labelsize": 13,
+        "legend.fontsize": 13,
+    })
     base_colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
     line_colors = [base_colors[c] for c in colors]
  
