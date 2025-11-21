@@ -36,7 +36,7 @@ def get_per_patch_prediction_table(ctlearn_files_path):
                     "prediction": node.col("CTLearn_tel_prediction"),
                     "patch_index": node.col("patch_index"),
                     "patch_class": node.col("patch_class"),
-                    "cherenkov_pe": node.col("cherenkov_pe"),
+                    "true_image_sum": node.col("cherenkov_pe"),
                 })
                 all_tables.append(tab)
 
@@ -206,7 +206,7 @@ def get_ctlearn_per_event_table(ctlearn_file_paths, nsb=False):
                         "obs_id": image_table.col("obs_id"),
                         "event_id": image_table.col("event_id"),
                         "tel_id": image_table.col("tel_id"),
-                        "cherenkov_pe": image_table.col("true_image_sum")
+                        "true_image_sum": image_table.col("true_image_sum")
                     })
 
                 # ---- Predicciones ----
@@ -328,7 +328,7 @@ def plot_trigger_efficiency(tables, names, thresholds, tdscans, apply_tdscan, ge
     plt.figure(figsize=(11,7))
     for i, table in enumerate(tables):
         # Event PEs
-        pes = np.array(table["cherenkov_pe"])
+        pes = np.array(table["true_image_sum"])
         if tdscans[i] == True:
             tdscan_preds = np.array(table["low_trigger"])
         elif apply_tdscan[i]==True:
@@ -387,9 +387,9 @@ def plot_trigger_efficiency(tables, names, thresholds, tdscans, apply_tdscan, ge
 
     return bin_centers, eff
 
-def plot_trigger_efficiency_energy(tables, names, thresholds, tdscans, apply_tdscan, get_ratio=None, e_min=10, e_max=1e4, e_bin_width=0.1, log_bins=True, ymin=0.01):
+def plot_trigger_efficiency_energy(tables, names, thresholds, tdscans, apply_tdscan, effective_area=True, sim_rad=800, get_ratio=None, e_min=10, e_max=1e4, e_bin_width=0.1, log_bins=True, ymin=0.01):
     """
-    Plot trigger efficiency vs true energy (in TeV).
+    Plot trigger efficiency vs true energy (in GeV).
     """
 
     # Definir bins de energía (logarítmicos o lineales)
@@ -436,7 +436,7 @@ def plot_trigger_efficiency_energy(tables, names, thresholds, tdscans, apply_tds
 
     plt.xlabel("True energy [GeV]")
     plt.ylabel("Trigger efficiency")
-    plt.title("Trigger efficiency vs True energy")
+    plt.title("Trigger efficiency vs true energy")
     if log_bins:
         plt.xscale('log')
     plt.ylim(ymin, 1.05)  
@@ -453,7 +453,7 @@ def plot_trigger_efficiency_energy(tables, names, thresholds, tdscans, apply_tds
             ratio = np.divide(eff, ref_eff, out=np.zeros_like(eff), where=ref_eff != 0)
             plt.plot(bin_centers, ratio, label=f'{names[i]} / {names[get_ratio]}')
 
-        plt.xlabel("True energy [TeV]")
+        plt.xlabel("True energy [GeV]")
         plt.ylabel("Efficiency ratio")
         plt.title(f"Efficiency ratio (reference: {names[get_ratio]})")
         if log_bins:
@@ -462,11 +462,49 @@ def plot_trigger_efficiency_energy(tables, names, thresholds, tdscans, apply_tds
         plt.legend()
         plt.show()
 
-    return bin_centers, eff
+    # Eff area per energy bin
+    if effective_area:
+        plt.figure(figsize=(11,7))
+        area_eff_list = []
+        A_sim = np.pi * sim_rad**2
+        for i, eff in enumerate(eff_list):
+            area_eff = eff * A_sim
+            area_eff_list.append(area_eff)
+            plt.plot(bin_centers, area_eff, label=f'{names[i]}')
+
+        plt.xlabel("True energy [GeV]")
+        plt.ylabel("Effective area [m²]")
+        plt.title("Effective area vs true energy")
+        if log_bins:
+            plt.xscale('log')
+        plt.yscale('log')
+        plt.grid(True, which="both")
+        plt.legend()
+        plt.show()
+
+        # Ratio de área efectiva respecto a una referencia
+        if get_ratio is not None and isinstance(get_ratio, int) and 0 <= get_ratio < len(area_eff_list):
+            ref_area = area_eff_list[get_ratio]
+            plt.figure(figsize=(11,7))
+            for i, area_eff in enumerate(area_eff_list):
+                ratio = np.divide(area_eff, ref_area, out=np.zeros_like(area_eff), where=ref_area != 0)
+                plt.plot(bin_centers, ratio, label=f'{names[i]} / {names[get_ratio]}')
+
+            plt.xlabel("True energy [GeV]")
+            plt.ylabel("Effective area ratio")
+            plt.title(f"Effective area ratio (reference: {names[get_ratio]})")
+            if log_bins:
+                plt.xscale('log')
+            plt.grid(True, which="both")
+            plt.legend()
+            plt.show()
+
+
+    return bin_centers, eff_list
 
 
 
-def get_merged_trigger_tables(files, path="/table", columns = ['table_index', 'obs_id', 'event_id',	'tel_id', 'true_image_sum', 'low_trigger', 'trigger_per_sample', 'true_energy']):
+def get_merged_trigger_tables(files, path="/table", columns = ['table_index', 'obs_id', 'event_id',	'tel_id', 'true_image_sum', 'low_trigger', 'trigger_per_sample', 'true_energy', 'peak_sample', 'max_pix', 'triggered_febs']):
     all_tables = []
 
     for file_index, file_path in enumerate(files):
@@ -494,25 +532,35 @@ def get_merged_trigger_tables(files, path="/table", columns = ['table_index', 'o
     stacked = vstack(all_tables)
     return stacked
 
-def get_l1_tdscan_output_freq(tables, titles):
+def get_l1_tdscan_output_freq(tables, titles, tdscan, time=40):
     models = []
     out_rates = []
     n_nsb_events = []
+    effs = []
 
     for i, table in enumerate(tables):
-        lt = table["low_trigger"]
+        if tdscan:
+            trigger_per_sample = np.array(table["trigger_per_sample"])
+            lt = np.any(trigger_per_sample[:, 1:time-1] == 1, axis=1)
+            eff_time = time - 2
+
+        else:
+            lt = table["low_trigger"]
+            eff_time = time
         eff = np.sum(lt) / len(lt)
-        out_freq = eff / 30 * 10**6  # en kHz
+           
+        out_freq = eff / eff_time * 10**6  # en kHz
         n_nsb = len(lt)
 
         models.append(titles[i])
         out_rates.append(round(out_freq, 2))
         n_nsb_events.append(n_nsb)
+        effs.append(round(eff*100,2))
         print(f"For the {titles[i]}, on {len(lt)} nsb events, we get an output frequency from accidental triggers of {out_freq} kHz")
 
     result_table = Table(
-        [models, out_rates, n_nsb_events],
-        names=("Model", "Output Rate (kHz)", "Number of NSB events")
+        [models, out_rates, effs, n_nsb_events],
+        names=("Model", "Output Rate (kHz)", "Percentage of triggered events", "Number of NSB events")
     )
 
     return result_table

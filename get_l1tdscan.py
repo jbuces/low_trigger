@@ -55,14 +55,14 @@ def main():
         os.makedirs(output_dir, exist_ok=True)
         logger.info(f"Created output directory: {output_dir}")
 
-    l1_array, tdscan_list = get_neighbors_info(neighbors_file, epsl1)
+    l1_array, tdscan_list, feb_indices = get_neighbors_info(neighbors_file, epsl1)
     if epsl1==2 or epsl1==3:
         l1_mask = (l1_array >= 0).astype(int)
     else:
         l1_mask = None
     trigtable = get_table(simtel_file)
     n_events = len(trigtable)
-    l1_trigger, trig_per_sample = [], []
+    l1_trigger, trig_per_sample, peak_samples, max_pixs, febs = [], [], [], [], []
     logger.info("Processing the data...")
 
     packed_masks = None
@@ -77,11 +77,17 @@ def main():
             tel_id = row["tel_id"]
             table_idx = row["table_index"]
             tel_path = f'/r0/event/telescope/tel_{tel_id:03d}'
-            wf = h5file.get_node(tel_path)[table_idx]['waveform']
+            sim_path = f'/simulation/event/telescope/images/tel_{tel_id:03d}'
+            wf = h5file.get_node(tel_path)[table_idx]['waveform'][0,:,:]
+            true_im = np.array(h5file.get_node(sim_path)[table_idx]['true_image'], dtype=int).reshape(-1, 1)
+            max_pix = np.argmax(true_im)
 
-            trig, trig_p_sample, bin_flowers = apply_low_trigger(wf, l1_array, l1_threshold, tdscan_list, eps_t, min_pts, trigger_type, l1_mask)
+            trig, trig_p_sample, bin_flowers, peak_sample, febs_on = apply_low_trigger(wf, l1_array, l1_threshold, tdscan_list, eps_t, min_pts, trigger_type, l1_mask, max_pix, feb_indices)
             l1_trigger.append(trig)
             trig_per_sample.append(trig_p_sample)
+            peak_samples.append(peak_sample)
+            max_pixs.append(max_pix)
+            febs.append(febs_on)
 
             if add_mask == "True":
                 bf = np.asarray(bin_flowers, dtype=np.uint8)  # shape (n_pixels, n_times)
@@ -110,6 +116,9 @@ def main():
 
     trigtable.add_column(l1_trigger, name="low_trigger")
     trigtable.add_column(trig_per_sample, name="trigger_per_sample")
+    trigtable.add_column(peak_samples, name="peak_sample")
+    trigtable.add_column(max_pixs, name="max_pix")
+    trigtable.add_column(febs, name="triggered_febs")
     if add_mask=="True":
         if packed_masks is None:
             raise RuntimeError("add_mask=True pero no se generó ningún mask (packed_masks is None).")
@@ -165,9 +174,9 @@ def get_neighbors_info(neighbors_file, epsl1):
         l1_list=feb_indices
         neighbor_tdscan_eps1_list= feb_neighbors
 
-    return l1_list, neighbor_tdscan_eps1_list
+    return l1_list, neighbor_tdscan_eps1_list, feb_indices
 
-def apply_low_trigger(x, l1_list, l1_threshold, tdscan_list, eps_t, min_pts, trigger_type, l1_mask):
+def apply_low_trigger(x, l1_list, l1_threshold, tdscan_list, eps_t, min_pts, trigger_type, l1_mask, max_pix, feb_indices):
     """
     Apply a low level trigger to the raw waveform.
 
@@ -192,19 +201,22 @@ def apply_low_trigger(x, l1_list, l1_threshold, tdscan_list, eps_t, min_pts, tri
     trigger : int
         Trigger binary.
     """
-    x=x[0,:,:]
     n_pixels, length = x.shape
     sequence_position = length // 2 - 1            
-    init = int(1 + sequence_position - 30 / 2)
-    stop =  int(1 + sequence_position + 30 / 2)
-    x = x[:, int(init) : int(stop)]
+    init = int(1 + sequence_position - 20 / 2)
+    stop =  int(1 + sequence_position + 20 / 2)
+    # x = x[:, int(init) : int(stop)]
     time = x.shape[1]
+    peak_sample = np.argmax(x[max_pix])
     # Assign the l1 neighbor list, summing on flowers or superflowers for each flower.
     if l1_mask is not None:
         vals = x[l1_list] 
         flower_sums = (vals * l1_mask[..., None]).sum(axis=1)
     else:
         flower_sums = x[np.array(l1_list)].sum(axis=1)
+    if trigger_type == "rolling_l1":
+        arr_rolled = sliding_window_view(flower_sums, window_shape=3, axis=1)
+        flower_sums = arr_rolled.sum(axis=-1)
 
     # Thresholding (broadcast back to each pixel in group)
     bin_flowers = (flower_sums > l1_threshold).astype(int)  # shape: (n_flowers, time)
@@ -216,7 +228,7 @@ def apply_low_trigger(x, l1_list, l1_threshold, tdscan_list, eps_t, min_pts, tri
             triggered[:, offset:offset + valid.shape[1]] |= valid
         bin_flowers=triggered
     # TDSCAN mask cleaning:
-    if trigger_type == "tdscan":
+    elif trigger_type == "tdscan":
         num_flowers = len(bin_flowers)
         tdscan_flowers = np.zeros((num_flowers, time), dtype=np.float32)
         # Precompute cumulative sum over time for each pixel
@@ -239,10 +251,15 @@ def apply_low_trigger(x, l1_list, l1_threshold, tdscan_list, eps_t, min_pts, tri
             tdscan_flowers[i] = (total_sum >= min_pts).astype(np.float32)
         bin_flowers = tdscan_flowers # shape: (n_flowers, time)
 
+    rep = 49 if l1_list.shape[0]==163 else 7
+    bin_pixels = np.repeat(bin_flowers, rep, axis=0)
+    pixel_on = np.any(bin_pixels, axis=1) #7987
+    feb_on = np.any(pixel_on[feb_indices], axis=1)
+
     trigger = int(np.any(bin_flowers))
     trigger_per_sample = bin_flowers.any(axis=0).astype(int)
-
-    return trigger, trigger_per_sample, bin_flowers
+    # bin_flowers = bin_flowers[:, int(init) : int(stop)]
+    return trigger, trigger_per_sample, bin_flowers, peak_sample, feb_on
 
 def get_table(input_file, tel_ids=[1, 2, 3, 4]):
     """
@@ -257,7 +274,7 @@ def get_table(input_file, tel_ids=[1, 2, 3, 4]):
         energy_tab = read_table(input_file, energy_path)
         energy_tab = energy_tab['obs_id', 'event_id', 'true_energy']
     except Exception as e:
-        logger.warning(f"  -> Failed to read simulation table for tel_{tel_id:03d}: {e}")
+        logger.warning(f"  -> Failed to read shower table")
 
     for tel_id in tel_ids:
         wf_path = f"/r0/event/telescope/tel_{tel_id:03d}"
