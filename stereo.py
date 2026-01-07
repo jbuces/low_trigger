@@ -9,7 +9,7 @@ from astropy.table import Table, join, vstack, unique
 import logging
 from itertools import combinations
 import matplotlib.pyplot as plt
-
+import pickle
 
 logging.basicConfig(
     level=logging.INFO,  
@@ -100,6 +100,14 @@ def build_stereo_nsb_tables(table, n_tels=4, combos_needed=10, seed=123):
 
     return vstack(stereo_tables).copy()
 
+def save_stereo_table(table, path):
+    with open(path, "wb") as f:
+        pickle.dump(table, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+def load_stereo_table(path):
+    with open(path, "rb") as f:
+        tbl_loaded = pickle.load(f)
+    return tbl_loaded
 
 def stereo_simple_trigger(table, min_triggers=1):
     """

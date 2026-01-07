@@ -147,35 +147,38 @@ def get_camera_prediction_plots(preds, pe_bins, nsb = False):
         plt.show()
 
 
-def get_camera_nsb_threshold(per_event_table, freqs_kHz, ns_samples=31):
+def get_camera_nsb_threshold(per_event_table, freq_kHz_in, freqs_kHz_out):
 
     # extraemos mínimos por evento
     min_preds = np.array(per_event_table["CTLearn_tel_prediction"])
+    num_valid = np.sum(~np.isnan(min_preds))
+    print('total', len(min_preds))
+    print('no son nan', num_valid)
     # definimos thresholds donde buscar
     thresholds = np.linspace(0, 1, 1000)
 
     # calculamos fracción de eventos activados para cada threshold
 
     triggered_fraction = [
-        np.sum((min_preds < thr) & ~np.isnan(min_preds)) / len(min_preds)
+        np.sum((min_preds < thr) & ~np.isnan(min_preds)) / num_valid
         for thr in thresholds
     ]
     triggered_fraction = np.array(triggered_fraction)
 
-    target_fractions = [f * ns_samples * 1e-6 for f in freqs_kHz]
+    target_fractions = [f/freq_kHz_in for f in freqs_kHz_out]
     thr_values = []
     for i, frac in enumerate(target_fractions):
         idx = np.searchsorted(triggered_fraction, frac)
 
         thr_value = thresholds[idx]
         thr_values.append(thr_value)
-        print(f"≈ Threshold {thr_value:.3f} da un {frac *100:.3f}% de eventos disparados, es decir {freqs_kHz[i]} kHz")
+        print(f"≈ Threshold {thr_value:.3f} da un {frac *100:.3f}% de eventos disparados, es decir {freqs_kHz_out[i]} kHz")
     
         # plot
     plt.figure(figsize=(8, 5))
     plt.plot(thresholds, triggered_fraction, lw=2)
     for i, thr in enumerate(thr_values):
-        plt.axvline(x=thr, linestyle='--', label=f"{freqs_kHz[i]} kHz")
+        plt.axvline(x=thr, linestyle='--', label=f"{freqs_kHz_out[i]} kHz")
     plt.xlabel("CTLearn Threshold")
     plt.ylabel("Triggered fraction per event")
     plt.title("Trigger curve (min_prediction < threshold)")
@@ -258,7 +261,8 @@ def plot_trigger_efficiency_camera(tables, names, thresholds, tdscans, get_ratio
 
 def plot_trigger_efficiency_energy_camera(
     tables, names, tdscans, errors = True, stereo=False, effective_area=True, sim_rad=800, get_ratio=None, 
-    e_min=5, e_max=5e4, e_bin_width=0.1, log_bins=True, ymin=0.01, colors = [0,1,2,3,4,5],line_styles = ['solid','solid','solid','solid','solid','solid'] 
+    e_min=5, e_max=5e4, e_bin_width=0.1, log_bins=True, ymin=0.01, colors = [0,1,2,3,4,5],line_styles = ['solid','solid','solid','solid','solid','solid'],
+    save_efficiency = None, save_area = None,
 ):
     """
     Plot trigger efficiency vs true energy (in GeV).
@@ -391,6 +395,11 @@ def plot_trigger_efficiency_energy_camera(
         ax_ratio.grid(True, which="both")
 
         plt.tight_layout()
+        # Guardar como JPG
+        if save_efficiency:
+            plt.savefig(f"{save_efficiency}.jpg", format="jpg", dpi=300)
+            # Guardar como EPS (vectorial)
+            plt.savefig(f"{save_efficiency}.eps", format="eps")
         plt.show()
 
     if effective_area:
@@ -461,5 +470,9 @@ def plot_trigger_efficiency_energy_camera(
             ax_ratio.set_xscale('log')
             ax_ratio.grid(True, which="both")
             plt.tight_layout()
+            if save_area:
+                plt.savefig(f"{save_area}.jpg", format="jpg", dpi=300)
+                # Guardar como EPS (vectorial)
+                plt.savefig(f"{save_area}.eps", format="eps")
             plt.show()
 
