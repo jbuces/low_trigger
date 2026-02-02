@@ -7,7 +7,6 @@ and CTLearn output files.
 
 
 import numpy as np
-import h5py
 import matplotlib.pyplot as plt
 from astropy.table import Table, join, vstack
 import tables

@@ -7,10 +7,8 @@ and CTLearn output files.
 
 
 import numpy as np
-import h5py
 import matplotlib.pyplot as plt
 from astropy.table import Table, join, vstack
-import tables
 from pathlib import Path
 from ctapipe.io import read_table
 from matplotlib.gridspec import GridSpec
@@ -53,7 +51,7 @@ def get_camera_trigger_table(ctlearn_files_path, trigger_files):
             try:
                 cam_tab = read_table(file_path, table_path)
             except Exception:
-                print(f"⚠️ {table_path} no encontrado en {file_path}")
+                # print(f"⚠️ {table_path} no encontrado en {file_path}")
                 continue
 
             # Seleccionar columnas relevantes (algunas pueden variar entre versiones)
@@ -172,7 +170,7 @@ def get_camera_nsb_threshold(per_event_table, freq_kHz_in, freqs_kHz_out):
 
         thr_value = thresholds[idx]
         thr_values.append(thr_value)
-        print(f"≈ Threshold {thr_value:.3f} da un {frac *100:.3f}% de eventos disparados, es decir {freqs_kHz_out[i]} kHz")
+        print(f"≈ Threshold {thr_value} da un {frac *100:.3f}% de eventos disparados, es decir {freqs_kHz_out[i]} kHz")
     
         # plot
     plt.figure(figsize=(8, 5))
@@ -196,6 +194,14 @@ def get_table_with_low_trigger(table, threshold):
 
 
 def plot_trigger_efficiency_camera(tables, names, thresholds, tdscans, get_ratio=None, pe_min=20, pe_max=250, pe_bin_width=10):
+    plt.rcParams.update({
+        "font.size": 16,       # tamaño base
+        "axes.titlesize": 16,  # títulos de cada eje
+        "axes.labelsize": 16,  # labels x/y
+        "xtick.labelsize": 13,
+        "ytick.labelsize": 13,
+        "legend.fontsize": 13,
+    })
     # Define PE bins
     bins = np.arange(pe_min, pe_max + pe_bin_width, pe_bin_width)
     bin_centers = bins[:-1] + pe_bin_width / 2
@@ -258,6 +264,241 @@ def plot_trigger_efficiency_camera(tables, names, thresholds, tdscans, get_ratio
 
     return bin_centers, eff
 
+
+def plot_trigger_efficiency_energy_camera_onshowers(
+    tables, names, tdscans, number_files=50, shower_file=10000, rep_shower=10, gamma_sim=2, errors = True, stereo=False, effective_area=True, sim_rad=800, get_ratio=None, 
+    e_min=5, e_max=5e4, e_bin_width=0.1, log_bins=True, ymin=0.01, colors = [0,1,2,3,4,5],line_styles = ['solid','solid','solid','solid','solid','solid'],
+    save_efficiency = None, save_area = None,
+):
+    """
+    Plot trigger efficiency vs true energy (in GeV).
+    """
+    plt.rcParams.update({
+        "font.size": 16,       # tamaño base
+        "axes.titlesize": 16,  # títulos de cada eje
+        "axes.labelsize": 16,  # labels x/y
+        "xtick.labelsize": 13,
+        "ytick.labelsize": 13,
+        "legend.fontsize": 13,
+    })
+    base_colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    line_colors = [base_colors[c] for c in colors]
+ 
+    if log_bins:
+        bins = np.logspace(np.log10(e_min), np.log10(e_max), int(np.log10(e_max/e_min)/np.log10(1+e_bin_width)) + 1)
+        bin_centers = np.sqrt(bins[:-1] * bins[1:])  
+    else:
+        bins = np.arange(e_min, e_max + e_bin_width, e_bin_width)
+        bin_centers = bins[:-1] + e_bin_width / 2
+
+
+    # Compute denominator per bin
+    total_showers = number_files * shower_file * rep_shower
+    if stereo is False:
+        total_showers *= 4
+
+    def integral_powerlaw(E1, E2, gamma):
+        if gamma == 1.0:
+            return np.log(E2/E1)
+        return (E2**(1-gamma) - E1**(1-gamma)) / (1-gamma)
+
+    norm_total = integral_powerlaw(5, 5e4, gamma_sim)
+
+    expected_counts = np.zeros(len(bin_centers))
+    for i, (low, high) in enumerate(zip(bins[:-1], bins[1:])):
+        frac = integral_powerlaw(low, high, gamma_sim) / norm_total
+        expected_counts[i] = frac * total_showers
+
+    eff_list = []
+    err_list = [] 
+
+    plt.figure(figsize=(11,7))
+
+    for i, table in enumerate(tables):
+        energies = np.array(table["true_energy"]) * 1e3   # En GeV
+        if stereo is True or tdscans[i] is False:
+            tdscan_preds = np.array(table["low_trigger"])
+        else:
+            trigger_per_sample = np.array(table["trigger_per_sample"])
+            tdscan_preds = np.any(trigger_per_sample[:, 10:31] == 1, axis=1)
+            
+
+        eff = []
+        err = []    
+
+        for j, (low, high) in enumerate(zip(bins[:-1], bins[1:])):
+            mask = (energies >= low) & (energies < high)
+            total = expected_counts[j]
+            if total == 0:
+                eff.append(0)
+                err.append(0)
+            else:
+                eps = tdscan_preds[mask].sum() / total
+                eff.append(tdscan_preds[mask].sum() / total)
+                err.append(np.sqrt(eps*(1-eps)/total))
+
+        eff_list.append(np.array(eff))
+        err_list.append(np.array(err))
+
+        if get_ratio is None:
+            if errors:
+                plt.errorbar(
+                    bin_centers, eff, yerr=err,
+                    color=line_colors[i], linestyle=line_styles[i],
+                    label=f"{names[i]}", marker=''
+                )
+            else:
+                plt.plot(
+                    bin_centers, eff,
+                    color=line_colors[i],
+                    linestyle=line_styles[i],
+                    label=f"{names[i]}"
+                )
+    if get_ratio is None:
+        plt.xlabel("True energy [GeV]")
+        plt.ylabel("Trigger efficiency")
+        plt.title("Trigger efficiency vs True energy")
+        if log_bins:
+            plt.xscale('log')
+        plt.ylim(ymin, 1.05)  
+        plt.yscale('log')
+        plt.grid(True, which="both")
+        plt.legend()
+        plt.show()
+    if get_ratio is not None and isinstance(get_ratio, int) and 0 <= get_ratio < len(eff_list):
+
+        ref_eff = eff_list[get_ratio]
+
+        # Figura con dos paneles SIN separación
+        fig = plt.figure(figsize=(11, 8))
+        gs = GridSpec(2, 1, height_ratios=[3, 1], hspace=0)  # hspace=0 = pegados
+
+        ax_eff = fig.add_subplot(gs[0])
+        ax_ratio = fig.add_subplot(gs[1], sharex=ax_eff)
+
+        # --------- Eficiencia arriba ---------
+        for i, eff in enumerate(eff_list):
+            if errors:
+                ax_eff.errorbar(
+                    bin_centers, eff, yerr=err_list[i],
+                    color=line_colors[i], linestyle=line_styles[i],
+                    label=f"{names[i]}", marker=''
+                )
+
+            else:
+                ax_eff.plot(
+                    bin_centers, eff,
+                    color=line_colors[i],
+                    linestyle=line_styles[i],
+                    label=f"{names[i]}"
+                )
+
+        ax_eff.set_ylabel("Trigger efficiency")
+        ax_eff.set_xscale('log')
+        ax_eff.set_yscale('log')
+        ax_eff.set_ylim(ymin, 1.05)
+        ax_eff.grid(True, which="both")
+        ax_eff.set_title("Trigger efficiency vs true energy")
+        ax_eff.legend()
+
+        # Ocultar etiquetas de X en el panel superior
+        ax_eff.tick_params(labelbottom=False)
+
+        # --------- Ratio abajo ---------
+        for i, eff in enumerate(eff_list):
+            ratio = np.divide(eff, ref_eff, out=np.zeros_like(eff), where=ref_eff != 0)
+            ax_ratio.plot(
+                bin_centers, ratio,
+                color=line_colors[i],
+                linestyle=line_styles[i],
+                label=f"{names[i]} / {names[get_ratio]}"
+            )
+        ax_ratio.set_xlabel("True energy [GeV]")
+        ax_ratio.set_ylabel("Ratio")
+        ax_ratio.set_xscale('log')
+        ax_ratio.grid(True, which="both")
+
+        plt.tight_layout()
+        # Guardar como JPG
+        if save_efficiency:
+            plt.savefig(f"{save_efficiency}.jpg", format="jpg", dpi=300)
+            # Guardar como EPS (vectorial)
+            plt.savefig(f"{save_efficiency}.eps", format="eps")
+        plt.show()
+
+    if effective_area:
+        plt.figure(figsize=(11,7))
+        area_eff_list = []
+        area_err_list = []
+
+        A_sim = np.pi * sim_rad**2
+        for i, eff in enumerate(eff_list):
+            area_eff = eff * A_sim
+            area_err = err_list[i] * A_sim
+            area_eff_list.append(area_eff)
+            area_err_list.append(area_err)
+
+            if get_ratio is None:
+                if errors:
+                    plt.errorbar(bin_centers, area_eff, yerr=area_err, color=line_colors[i], linestyle=line_styles[i], label=f'{names[i]}')
+                else:
+                    plt.plot(bin_centers, area_eff, color=line_colors[i], linestyle=line_styles[i], label=f'{names[i]}')
+
+        if get_ratio is None:
+            plt.xlabel("True energy [GeV]")
+            plt.ylabel("Effective area [m²]")
+            plt.title("Effective area vs true energy")
+            if log_bins:
+                plt.xscale('log')
+            plt.yscale('log')
+            plt.grid(True, which="both")
+            plt.legend()
+            plt.show()
+
+        # Ratio de área efectiva respecto a una referencia
+        if get_ratio is not None and 0 <= get_ratio < len(area_eff_list):
+            ref_area = area_eff_list[get_ratio]
+            
+            fig = plt.figure(figsize=(11,8))
+            gs = GridSpec(2,1, height_ratios=[3,1], hspace=0)
+        
+            ax_area = fig.add_subplot(gs[0])
+            ax_ratio = fig.add_subplot(gs[1], sharex=ax_area)
+        
+            # Área efectiva
+            for i, area_eff in enumerate(area_eff_list):
+                if errors:
+                    ax_area.errorbar(bin_centers, area_eff, yerr=area_err_list[i],
+                        color=line_colors[i], linestyle=line_styles[i],
+                        label=f'{names[i]}', marker='')
+                else:
+                    ax_area.plot(bin_centers, area_eff,
+                        color=line_colors[i], linestyle=line_styles[i],
+                        label=f'{names[i]}', marker='')
+            ax_area.set_ylabel("Effective area [m²]")
+            ax_area.set_xscale('log')
+            ax_area.set_yscale('log')
+            ax_area.grid(True, which="both")
+            ax_area.legend()
+            ax_area.set_title("Effective area vs true energy")
+            ax_area.tick_params(labelbottom=False) 
+        
+            # Ratio
+            for i, area_eff in enumerate(area_eff_list):
+                ratio = np.divide(area_eff, ref_area, out=np.zeros_like(area_eff), where=ref_area != 0)
+                ax_ratio.plot(bin_centers, ratio,
+                              color=line_colors[i], linestyle=line_styles[i],
+                              label=f'{names[i]} / {names[get_ratio]}')
+            ax_ratio.set_xlabel("True energy [GeV]")
+            ax_ratio.set_ylabel("A_eff ratio")
+            ax_ratio.set_xscale('log')
+            ax_ratio.grid(True, which="both")
+            plt.tight_layout()
+            if save_area:
+                plt.savefig(f"{save_area}.jpg", format="jpg", dpi=300)
+                # Guardar como EPS (vectorial)
+                plt.savefig(f"{save_area}.eps", format="eps")
+            plt.show()
 
 def plot_trigger_efficiency_energy_camera(
     tables, names, tdscans, errors = True, stereo=False, effective_area=True, sim_rad=800, get_ratio=None, 
