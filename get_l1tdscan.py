@@ -8,15 +8,6 @@ from astropy.table import Table, join, vstack
 import logging
 from numpy.lib.stride_tricks import sliding_window_view
 
-logging.basicConfig(
-    level=logging.INFO,  
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-    ]
-)
-logger = logging.getLogger()
-
 
 help_message = """
 This script reads an h5 file produced by ctapipe from simtel, and applies different low level trigger algorithms.
@@ -38,6 +29,25 @@ def parse_args():
     parser.add_argument('-pts', '--min_pts', help='Min pts for tdscan flower convolution, if flower_quantised threshold for the sum per FEB.', required=True, type=int)
     return parser.parse_args()
 
+def setup_logger(log_file):
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+    formatter = logging.Formatter(
+        "%(asctime)s - %(levelname)s - %(message)s"
+    )
+    # Consola
+    sh = logging.StreamHandler(sys.stdout)
+    sh.setFormatter(formatter)
+    # Archivo
+    fh = logging.FileHandler(log_file)
+    fh.setFormatter(formatter)
+
+    logger.addHandler(sh)
+    logger.addHandler(fh)
+
+    return logger
+
 def main():
     args = parse_args()
     h5_file = args.input
@@ -52,16 +62,33 @@ def main():
     q_step = args.quantisation_step
 
     output_dir = os.path.dirname(out_table)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+        logger.info(f"Created output directory: {output_dir}")
+
+    log_file = os.path.join(
+        output_dir,
+        os.path.basename(out_table).replace(".h5", ".log")
+    )
+
+    logger = setup_logger(log_file)
+
+    logger.info("====================================")
+    logger.info("Starting trigger simulation")
+    logger.info(f"Input file     : {h5_file}")
+    logger.info(f"Output file    : {out_table}")
+    logger.info(f"Trigger type   : {trigger_type}")
+    logger.info(f"L1 threshold   : {l1_threshold}")
+    logger.info(f"EPSL1          : {epsl1}")
+    logger.info(f"Min pts        : {min_pts}")
+    logger.info("====================================")
+
     if q_step == 0:
         q_step = None
     if trigger_type == 'quantised_per_feb' and epsl1 != 3:
         raise ValueError('The quantised per feb trigger needs feb region size for the digital sum')
     
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir, exist_ok=True)
-        logger.info(f"Created output directory: {output_dir}")
-
-    l1_array, tdscan_list, feb_indices = get_neighbors_info(neighbors_file, epsl1)
+    l1_array, tdscan_list, feb_indices, cam_neighbor_array = get_neighbors_info(neighbors_file, epsl1)
     if epsl1==2 or epsl1==3:
         l1_mask = (l1_array >= 0).astype(int)
     else:
@@ -167,6 +194,7 @@ def main():
     logger.info("Trigger finished")
     
 def get_neighbors_info(neighbors_file, epsl1):
+    logger = logging.getLogger()
     logger.info("Getting the neighbors information")
     with tables.open_file(neighbors_file, mode="r") as f:
         cam_neighbor_array = f.root.neighbors.camera_neighbors[:]
@@ -180,13 +208,13 @@ def get_neighbors_info(neighbors_file, epsl1):
         fl_neighbor_l1_list = [row[row != -1].tolist() for row in fl_neighbor_array_l1]
         supfl_neighbor_l1_list = [row[row != -1].tolist() for row in supfl_neighbor_array_l1]
         
-        neighbor_tdscan_eps1_list = []
+        # neighbor_tdscan_eps1_list = []
 
-        with open("/lhome/ext/ucm147/ucm1473/dl1-data-handler/dl1_data_handler/ressources/neighbors_fpga0_no_overlap_border_1.txt", "r") as f:
-            for linea in f:
-                nums = linea.strip().split(",")     # separar por comas
-                nums = [int(x) for x in nums if x]  # convertir a int (evita strings vacíos)
-                neighbor_tdscan_eps1_list.append(nums)
+        # with open("/lhome/ext/ucm147/ucm1473/dl1-data-handler/dl1_data_handler/ressources/neighbors_fpga0_no_overlap_border_1.txt", "r") as f:
+        #     for linea in f:
+        #         nums = linea.strip().split(",")     # separar por comas
+        #         nums = [int(x) for x in nums if x]  # convertir a int (evita strings vacíos)
+        #         neighbor_tdscan_eps1_list.append(nums)
 
         logger.info(f"longitud de lista tdscan {len(neighbor_tdscan_eps1_list)}")     # debería ser 1141
         logger.info(f"longitud de primera linea {len(neighbor_tdscan_eps1_list[0])}")       # primera fila
@@ -200,7 +228,7 @@ def get_neighbors_info(neighbors_file, epsl1):
         l1_list=feb_indices
         neighbor_tdscan_eps1_list= feb_neighbors
 
-    return l1_list, neighbor_tdscan_eps1_list, feb_indices
+    return l1_list, neighbor_tdscan_eps1_list, feb_indices, cam_neighbor_array
 
 
 def rolling_digital_sum(flower_sums, eps_t):
@@ -381,6 +409,8 @@ def get_table(input_file, tel_ids=[1, 2, 3, 4]):
     Crea una tabla con todos los eventos para los telescopios indicados.
     Verifica que la tabla de r0 tenga los mismos eventos que la de simulación.
     """
+    logger = logging.getLogger()
+    
     tel_tables = []
 
     energy_path = "/simulation/event/subarray/shower"
@@ -395,12 +425,12 @@ def get_table(input_file, tel_ids=[1, 2, 3, 4]):
         wf_path = f"/r0/event/telescope/tel_{tel_id:03d}"
         sim_path = f"/simulation/event/telescope/images/tel_{tel_id:03d}"
 
-        logger.info(f"Reading R0 data for tel_{tel_id:03d} from {wf_path}")
-        try:
-            r0 = read_table(input_file, wf_path)
-        except Exception as e:
-            logger.warning(f"  -> Failed to read R0 table for tel_{tel_id:03d}: {e}")
-            continue
+        # logger.info(f"Reading R0 data for tel_{tel_id:03d} from {wf_path}")
+        # try:
+        #     r0 = read_table(input_file, wf_path)
+        # except Exception as e:
+        #     logger.warning(f"  -> Failed to read R0 table for tel_{tel_id:03d}: {e}")
+        #     continue
         logger.info(f"Reading sim data for tel_{tel_id:03d} from {sim_path}")
         try:
             sim = read_table(input_file, sim_path)
@@ -408,21 +438,21 @@ def get_table(input_file, tel_ids=[1, 2, 3, 4]):
             logger.warning(f"  -> Failed to read simulation table for tel_{tel_id:03d}: {e}")
             continue
 
-        if len(r0) == 0:
-            logger.warning(f"  -> R0 table for tel_{tel_id:03d} is empty, skipping")
-            continue
+        # if len(r0) == 0:
+        #     logger.warning(f"  -> R0 table for tel_{tel_id:03d} is empty, skipping")
+        #     continue
 
-        logger.info(f"  -> {len(r0)} rows in R0 table for tel_{tel_id:03d}")
+        # logger.info(f"  -> {len(r0)} rows in R0 table for tel_{tel_id:03d}")
         logger.info(f"  -> {len(sim)} rows in sim table for tel_{tel_id:03d}")
 
-        if len(r0) != len(sim):
-            raise ValueError(f"Simulation table and r0 table have not the same length for tel_{tel_id:03d}")
-        if len(np.unique(r0["event_id"])) != len(r0):
-            raise ValueError(f"R0 table has duplicated events for tel_{tel_id:03d}")
+        # if len(r0) != len(sim):
+        #     raise ValueError(f"Simulation table and r0 table have not the same length for tel_{tel_id:03d}")
+        # if len(np.unique(r0["event_id"])) != len(r0):
+        #     raise ValueError(f"R0 table has duplicated events for tel_{tel_id:03d}")
         if len(np.unique(sim["event_id"])) != len(sim):
             raise ValueError(f"Sim table has duplicated events for tel_{tel_id:03d}")
-        if not np.array_equal(np.sort(r0["event_id"]), np.sort(sim["event_id"])):
-            raise ValueError(f"Mismatch in event_ids between R0 and Sim tables for tel_{tel_id:03d}")
+        # if not np.array_equal(np.sort(r0["event_id"]), np.sort(sim["event_id"])):
+        #     raise ValueError(f"Mismatch in event_ids between R0 and Sim tables for tel_{tel_id:03d}")
 
         # Añadir columna de índice para cada fila
         sim = sim["obs_id", "event_id", "tel_id", "true_image_sum"]
