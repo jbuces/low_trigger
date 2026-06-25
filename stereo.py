@@ -109,7 +109,7 @@ def load_stereo_table(path):
         tbl_loaded = pickle.load(f)
     return tbl_loaded
 
-def stereo_simple_trigger(table, min_triggers=1):
+def stereo_simple_trigger(table, min_triggers=1, name='time_low_trigger'):
     """
     Añade una columna 'low_trigger' a la tabla, que vale 1 si al menos `min_triggers`
     telescopios del 'low_trigger_array' tienen valor 1.
@@ -120,18 +120,17 @@ def stereo_simple_trigger(table, min_triggers=1):
     for arr in out_table['low_trigger_array']:
         low_trigger.append(1 if np.sum(arr) >= min_triggers else 0)
     
-    out_table['time_low_trigger'] = low_trigger
+    out_table[name] = low_trigger
     return out_table
 
 def stereo_time_trigger(table, window=20, name='time_low_trigger'):
     out_table = table.copy()
-
     stereo_trigger = []
     time_trigger_arrays = []
 
     for trig, low_trig in zip(out_table['trigger_per_sample'],
                               out_table['low_trigger_array']):
-        
+
         n_tel = trig.shape[0]
 
         # inicializamos salida con misma forma que low_trig
@@ -180,18 +179,21 @@ def topo_trigger(table, feb_coincidences, n_required=2):
     n_events = len(time_low_trigger)
     topo_tel_list = np.empty(n_events, dtype=object)
     topo_tel_list[:] = [ [] for _ in range(n_events) ]
+    topo_trigger_tels = [np.zeros_like(time_trigger_tels[i]) for i in range(n_events)]
+
     for evt in range(len(time_low_trigger)):
 
-        # Si no hay low trigger global → saltar
+        # Si no hay low trigger global saltar
         if time_low_trigger[evt] != 1:
             continue
 
-        # Índices locales de telescopios que triggeraron
+        # Índices locales de telescopios que triggerearon
         active_idx = np.where(time_trigger_tels[evt] == 1)[0]
 
         if len(active_idx) < n_required:
             continue
         topo_tels = set()
+        topo_indices = set()
         # Para cada par de índices locales
         for i, idx1 in enumerate(active_idx):
             for idx2 in active_idx[i+1:]:
@@ -211,17 +213,19 @@ def topo_trigger(table, feb_coincidences, n_required=2):
                     if any(f2 in allowed_f2 for f2 in febs_t2):
                         topo_tels.add(t1)
                         topo_tels.add(t2)
+                        topo_indices.update([idx1, idx2])
                         break
 
         if len(topo_tels) >= n_required:
             low_trigger[evt] = 1
             topo_tel_list[evt] = sorted(topo_tels)
+            for idx in topo_indices:
+                topo_trigger_tels[evt][idx] = 1
 
     out = table.copy()
     out['low_trigger'] = low_trigger
     out['topo_telescopes'] = topo_tel_list
     return out
-
 
 def plot_peak_samples_diff(stereo_table, logscale = True):
     tel_pairs = [(1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]

@@ -277,9 +277,9 @@ def plot_trigger_efficiency_energy_camera_onshowers(
         "font.size": 16,       # tamaño base
         "axes.titlesize": 16,  # títulos de cada eje
         "axes.labelsize": 16,  # labels x/y
-        "xtick.labelsize": 13,
-        "ytick.labelsize": 13,
-        "legend.fontsize": 13,
+        "xtick.labelsize": 16,
+        "ytick.labelsize": 16,
+        "legend.fontsize": 16,
     })
     base_colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
     line_colors = [base_colors[c] for c in colors]
@@ -312,7 +312,7 @@ def plot_trigger_efficiency_energy_camera_onshowers(
     eff_list = []
     err_list = [] 
 
-    plt.figure(figsize=(11,7))
+    plt.figure(figsize=(8,7))
 
     for i, table in enumerate(tables):
         energies = np.array(table["true_energy"]) * 1e3   # En GeV
@@ -427,7 +427,7 @@ def plot_trigger_efficiency_energy_camera_onshowers(
         plt.show()
 
     if effective_area:
-        plt.figure(figsize=(11,7))
+        plt.figure(figsize=(8,7))
         area_eff_list = []
         area_err_list = []
 

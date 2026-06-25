@@ -95,7 +95,7 @@ def main():
         l1_mask = None
     trigtable = get_table(h5_file)
     n_events = len(trigtable)
-    l1_trigger, trig_per_sample, peak_samples, max_pixs, febs = [], [], [], [], []
+    l1_trigger, trig_per_sample, peak_samples, max_pixs, febs, pes_n_maxpixs, act_pixs = [], [], [], [], [], [], []
     ampmax_nb_amplitudes, feb_amp_dists = [], []
     logger.info("Processing the data...")
 
@@ -116,6 +116,9 @@ def main():
             wf = h5file.get_node(tel_path)[table_idx]['waveform'][0,:,:]
             true_im = np.array(h5file.get_node(sim_path)[table_idx]['true_image'], dtype=int).reshape(-1, 1)
             max_pix = np.argmax(true_im)
+            pes_n_maxpix = true_im[cam_neighbor_array[max_pix]]
+            act_pix = np.count_nonzero(true_im)
+
             # Apply the trigger
             if trigger_type in ['quantised_l1', 'quantised_rolled_digital_sum', 'quantised_per_feb']:
                 trig, trig_p_sample, bin_flowers, peak_sample, febs_on, ampmax, feb_dist  = apply_low_trigger(wf, l1_array, l1_threshold, tdscan_list, eps_t, min_pts, trigger_type, l1_mask, max_pix, feb_indices, q_step)
@@ -127,6 +130,8 @@ def main():
             peak_samples.append(peak_sample)
             max_pixs.append(max_pix)
             febs.append(febs_on)
+            pes_n_maxpixs.append(pes_n_maxpix)
+            act_pixs.append(act_pix)
             if trigger_type in ['quantised_l1', 'quantised_rolled_digital_sum', 'quantised_per_feb']:
                 ampmax_nb_amplitudes.append(ampmax)
                 feb_amp_dists.append(feb_dist)
@@ -161,6 +166,8 @@ def main():
     trigtable.add_column(peak_samples, name="peak_sample")
     trigtable.add_column(max_pixs, name="max_pix")
     trigtable.add_column(febs, name="triggered_febs")
+    trigtable.add_column(pes_n_maxpixs, name="neighbors_max_pix")
+    trigtable.add_column(act_pixs, name="number_active_pixels")
     if trigger_type in ['quantised_l1', 'quantised_rolled_digital_sum', 'quantised_per_feb']:
         trigtable.add_column(ampmax_nb_amplitudes, name="max_feb")
         trigtable.add_column(feb_amp_dists, name="feb_amplitude_distribution")
@@ -422,15 +429,7 @@ def get_table(input_file, tel_ids=[1, 2, 3, 4]):
         logger.warning(f"  -> Failed to read shower table")
 
     for tel_id in tel_ids:
-        wf_path = f"/r0/event/telescope/tel_{tel_id:03d}"
         sim_path = f"/simulation/event/telescope/images/tel_{tel_id:03d}"
-
-        # logger.info(f"Reading R0 data for tel_{tel_id:03d} from {wf_path}")
-        # try:
-        #     r0 = read_table(input_file, wf_path)
-        # except Exception as e:
-        #     logger.warning(f"  -> Failed to read R0 table for tel_{tel_id:03d}: {e}")
-        #     continue
         logger.info(f"Reading sim data for tel_{tel_id:03d} from {sim_path}")
         try:
             sim = read_table(input_file, sim_path)
@@ -438,32 +437,17 @@ def get_table(input_file, tel_ids=[1, 2, 3, 4]):
             logger.warning(f"  -> Failed to read simulation table for tel_{tel_id:03d}: {e}")
             continue
 
-        # if len(r0) == 0:
-        #     logger.warning(f"  -> R0 table for tel_{tel_id:03d} is empty, skipping")
-        #     continue
-
-        # logger.info(f"  -> {len(r0)} rows in R0 table for tel_{tel_id:03d}")
         logger.info(f"  -> {len(sim)} rows in sim table for tel_{tel_id:03d}")
 
-        # if len(r0) != len(sim):
-        #     raise ValueError(f"Simulation table and r0 table have not the same length for tel_{tel_id:03d}")
-        # if len(np.unique(r0["event_id"])) != len(r0):
-        #     raise ValueError(f"R0 table has duplicated events for tel_{tel_id:03d}")
         if len(np.unique(sim["event_id"])) != len(sim):
             raise ValueError(f"Sim table has duplicated events for tel_{tel_id:03d}")
-        # if not np.array_equal(np.sort(r0["event_id"]), np.sort(sim["event_id"])):
-        #     raise ValueError(f"Mismatch in event_ids between R0 and Sim tables for tel_{tel_id:03d}")
-
+    
         # Añadir columna de índice para cada fila
         sim = sim["obs_id", "event_id", "tel_id", "true_image_sum"]
         sim.add_column(np.arange(len(sim)), name="table_index", index=0)
 
         tel_tables.append(sim)
-        # r0 = r0["obs_id", "event_id", "tel_id"]
-        # r0.add_column(np.arange(len(r0)), name="table_index", index=0)
-
-        # tel_tables.append(r0)
-
+      
     if len(tel_tables) == 0:
         logger.error("No valid telescope R0 tables were loaded!")
         return None
