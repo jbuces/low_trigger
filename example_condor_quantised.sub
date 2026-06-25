@@ -1,0 +1,180 @@
+universe     = vanilla
+executable   = /lhome/ext/ucm147/ucm1473/miniconda3/bin/conda
+getenv       = True
+
+# Arguments: use $(l1), $(pts), and $(run) macros
+arguments = run --name ctlearn --no-capture-output python /lhome/ext/ucm147/ucm1473/lowtrigger_stats/low_trigger/get_l1tdscan.py \
+  -i /lustre/ific.uv.es/ml/ucm147/datasets/TriggerlessData/gammas/prediction/h5/corsika_run$(run).r0.h5 \
+  -o /lustre/ific.uv.es/ml/ucm147/datasets/TriggerlessData/gammas/prediction/trigger/run$(run)/quantised_l1/step1_$(l1)_$(pts)/corsika_run$(run)_$(l1)cut.h5 \
+  -nf /lhome/ext/ucm147/ucm1473/dl1-data-handler/dl1_data_handler/ressources/newcam_sipm_patches.h5 \
+  -pts $(pts) \
+  -l1 $(l1) \
+  -epsl1 1 \
+  -trig quantised_l1 \
+  -epst 1 \
+  -add False \
+  -qstep 1
+
+log    = /lustre/ific.uv.es/ml/ucm147/datasets/TriggerlessData/gammas/prediction/trigger/run$(run)/quantised_l1/step1_$(l1)_$(pts)/l1tdscan.log
+output = /lustre/ific.uv.es/ml/ucm147/datasets/TriggerlessData/gammas/prediction/trigger/run$(run)/quantised_l1/step1_$(l1)_$(pts)/output.$(Cluster).$(Process).out
+error  = /lustre/ific.uv.es/ml/ucm147/datasets/TriggerlessData/gammas/prediction/trigger/run$(run)/quantised_l1/step1_$(l1)_$(pts)/error.$(Cluster).$(Process).err
+
+request_cpus    = 4
+request_memory  = 32G
+request_disk    = 32G
+
+# Queue runs
+queue run, pts, l1 from (
+1, 40, 2160
+2, 40, 2160
+3, 40, 2160
+4, 40, 2160
+5, 40, 2160
+6, 40, 2160
+7, 40, 2160
+8, 40, 2160
+9, 40, 2160
+10, 40, 2160
+11, 40, 2160
+12, 40, 2160
+13, 40, 2160
+14, 40, 2160
+15, 40, 2160
+16, 40, 2160
+17, 40, 2160
+18, 40, 2160
+19, 40, 2160
+20, 40, 2160
+21, 40, 2160
+22, 40, 2160
+23, 40, 2160
+24, 40, 2160
+25, 40, 2160
+26, 40, 2160
+27, 40, 2160
+28, 40, 2160
+29, 40, 2160
+30, 40, 2160
+31, 40, 2160
+32, 40, 2160
+33, 40, 2160
+34, 40, 2160
+35, 40, 2160
+36, 40, 2160
+37, 40, 2160
+38, 40, 2160
+39, 40, 2160
+40, 40, 2160
+41, 40, 2160
+42, 40, 2160
+43, 40, 2160
+44, 40, 2160
+45, 40, 2160
+46, 40, 2160
+47, 40, 2160
+48, 40, 2160
+49, 40, 2160
+50, 40, 2160
+1, 44, 2160
+2, 44, 2160
+3, 44, 2160
+4, 44, 2160
+5, 44, 2160
+6, 44, 2160
+7, 44, 2160
+8, 44, 2160
+9, 44, 2160
+10, 44, 2160
+11, 44, 2160
+12, 44, 2160
+13, 44, 2160
+14, 44, 2160
+15, 44, 2160
+16, 44, 2160
+17, 44, 2160
+18, 44, 2160
+19, 44, 2160
+20, 44, 2160
+21, 44, 2160
+22, 44, 2160
+23, 44, 2160
+24, 44, 2160
+25, 44, 2160
+26, 44, 2160
+27, 44, 2160
+28, 44, 2160
+29, 44, 2160
+30, 44, 2160
+31, 44, 2160
+32, 44, 2160
+33, 44, 2160
+34, 44, 2160
+35, 44, 2160
+36, 44, 2160
+37, 44, 2160
+38, 44, 2160
+39, 44, 2160
+40, 44, 2160
+41, 44, 2160
+42, 44, 2160
+43, 44, 2160
+44, 44, 2160
+45, 44, 2160
+46, 44, 2160
+47, 44, 2160
+48, 44, 2160
+49, 44, 2160
+50, 44, 2160
+1, 54, 2160
+2, 54, 2160
+3, 54, 2160
+4, 54, 2160
+5, 54, 2160
+6, 54, 2160
+7, 54, 2160
+8, 54, 2160
+9, 54, 2160
+10, 54, 2160
+11, 54, 2160
+12, 54, 2160
+13, 54, 2160
+14, 54, 2160
+15, 54, 2160
+16, 54, 2160
+17, 54, 2160
+18, 54, 2160
+19, 54, 2160
+20, 54, 2160
+21, 54, 2160
+22, 54, 2160
+23, 54, 2160
+24, 54, 2160
+25, 54, 2160
+26, 54, 2160
+27, 54, 2160
+28, 54, 2160
+29, 54, 2160
+30, 54, 2160
+31, 54, 2160
+32, 54, 2160
+33, 54, 2160
+34, 54, 2160
+35, 54, 2160
+36, 54, 2160
+37, 54, 2160
+38, 54, 2160
+39, 54, 2160
+40, 54, 2160
+41, 54, 2160
+42, 54, 2160
+43, 54, 2160
+44, 54, 2160
+45, 54, 2160
+46, 54, 2160
+47, 54, 2160
+48, 54, 2160
+49, 54, 2160
+50, 54, 2160
+)
+
+

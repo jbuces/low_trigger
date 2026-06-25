@@ -1,0 +1,80 @@
+universe     = vanilla
+executable   = /lhome/ext/ucm147/ucm1473/miniconda3/bin/conda
+getenv       = True
+
+# Arguments: use $(l1), $(pts), and $(run) macros
+arguments = run --name ctlearn --no-capture-output python /lhome/ext/ucm147/ucm1473/lowtrigger_stats/scripts/get_l1tdscan.py \
+  -i /lustre/ific.uv.es/ml/ucm147/datasets/TriggerlessData/gammas_prediction/corsika_run$(run).r0.h5 \
+  -o /lustre/ific.uv.es/ml/ucm147/datasets/TriggerlessData/gammas_prediction/triggers/run$(run)/tdscan/$(l1)_$(pts)/corsika_run$(run)_$(l1)cut_tdscan$(pts).h5 \
+  -nf /lhome/ext/ucm147/ucm1473/dl1-data-handler/dl1_data_handler/ressources/newcam_sipm_patches.h5 \
+  -pts $(pts) \
+  -l1 $(l1) \
+  -epsl1 $(epsl1) \
+  -trig tdscan \
+  -epst 1 \
+  -add False \
+  -qstep 0
+
+log    = /lustre/ific.uv.es/ml/ucm147/datasets/TriggerlessData/gammas_prediction/triggers/run$(run)/tdscan/$(l1)_$(pts)/l1tdscan.log
+output = /lustre/ific.uv.es/ml/ucm147/datasets/TriggerlessData/gammas_prediction/triggers/run$(run)/tdscan/$(l1)_$(pts)/output.$(Cluster).$(Process).out
+error  = /lustre/ific.uv.es/ml/ucm147/datasets/TriggerlessData/gammas_prediction/triggers/run$(run)/tdscan/$(l1)_$(pts)/error.$(Cluster).$(Process).err
+
+request_cpus    = 4
+request_memory  = 32G
+request_disk    = 32G
+
+# Queue runs 1–10 with both l1,pts combinations
+queue run, l1, epsl1, pts from (
+1,14915,2,4
+2,14915,2,4
+3,14915,2,4
+4,14915,2,4
+5,14915,2,4
+6,14915,2,4
+7,14915,2,4
+8,14915,2,4
+9,14915,2,4
+10,14915,2,4
+11,14915,2,4
+12,14915,2,4
+13,14915,2,4
+14,14915,2,4
+15,14915,2,4
+16,14915,2,4
+17,14915,2,4
+18,14915,2,4
+19,14915,2,4
+20,14915,2,4
+21,14915,2,4
+22,14915,2,4
+23,14915,2,4
+24,14915,2,4
+25,14915,2,4
+26,14915,2,4
+27,14915,2,4
+28,14915,2,4
+29,14915,2,4
+30,14915,2,4
+31,14915,2,4
+32,14915,2,4
+33,14915,2,4
+34,14915,2,4
+35,14915,2,4
+36,14915,2,4
+37,14915,2,4
+38,14915,2,4
+39,14915,2,4
+40,14915,2,4
+41,14915,2,4
+42,14915,2,4
+43,14915,2,4
+44,14915,2,4
+45,14915,2,4
+46,14915,2,4
+47,14915,2,4
+48,14915,2,4
+49,14915,2,4
+50,14915,2,4
+)
+
+
