@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "low_trigger"
+version = "0.1.0"
+description = "Low level trigger studies for the AdvCam (L1, TDSCAN, quantised L1) and CNN trigger chains"
+requires-python = ">=3.10"
+dependencies = ["numpy", "scipy", "pandas", "matplotlib", "astropy", "tables", "ctapipe"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

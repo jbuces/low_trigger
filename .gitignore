@@ -25,5 +25,6 @@ env/
 .DS_Store
 Thumbs.db
 
-# --- Archivos que sí queremos mantener ---
-# (No ignoramos los .h5)
+# --- Instalación y copias del editor ---
+*.egg-info/
+*~
