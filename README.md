@@ -41,7 +41,7 @@ low_trigger/
 ## Installation
 
 ```bash
-git clone <repo-url> low_trigger
+git clone git@github.com:jbuces/low_trigger.git low_trigger
 cd low_trigger
 pip install -e . --no-deps     # in an environment with numpy, scipy, pandas, matplotlib, astropy, tables, ctapipe
 ```
