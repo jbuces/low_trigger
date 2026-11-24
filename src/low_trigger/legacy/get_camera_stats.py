@@ -274,12 +274,20 @@ def plot_trigger_efficiency_energy_camera_onshowers(
     Plot trigger efficiency vs true energy (in GeV).
     """
     plt.rcParams.update({
-        "font.size": 16,       # tamaño base
-        "axes.titlesize": 16,  # títulos de cada eje
-        "axes.labelsize": 16,  # labels x/y
-        "xtick.labelsize": 16,
-        "ytick.labelsize": 16,
+        "font.size": 18,
+        "axes.titlesize": 18,
+        "axes.labelsize": 20,
+        "xtick.labelsize": 18,
+        "ytick.labelsize": 18,
         "legend.fontsize": 16,
+        "xtick.major.size": 8,
+        "xtick.minor.size": 4,
+        "ytick.major.size": 8,
+        "ytick.minor.size": 4,
+        "xtick.major.width": 1.5,
+        "ytick.major.width": 1.5,
+        "xtick.direction": "in",
+        "ytick.direction": "in",
     })
     base_colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
     line_colors = [base_colors[c] for c in colors]
@@ -460,7 +468,7 @@ def plot_trigger_efficiency_energy_camera_onshowers(
             ref_area = area_eff_list[get_ratio]
             
             fig = plt.figure(figsize=(11,8))
-            gs = GridSpec(2,1, height_ratios=[3,1], hspace=0)
+            gs = GridSpec(2,1, height_ratios=[2,1], hspace=0)
         
             ax_area = fig.add_subplot(gs[0])
             ax_ratio = fig.add_subplot(gs[1], sharex=ax_area)
@@ -475,13 +483,13 @@ def plot_trigger_efficiency_energy_camera_onshowers(
                     ax_area.plot(bin_centers, area_eff,
                         color=line_colors[i], linestyle=line_styles[i],
                         label=f'{names[i]}', marker='')
-            ax_area.set_ylabel("Effective area [m²]")
+            ax_area.set_ylabel(r"$A_\mathrm{eff}$ [m$^2$]")
             ax_area.set_xscale('log')
             ax_area.set_yscale('log')
-            ax_area.grid(True, which="both")
+            ax_area.grid(True, which="both", alpha=0.4)
             ax_area.legend()
-            ax_area.set_title("Effective area vs true energy")
-            ax_area.tick_params(labelbottom=False) 
+            # ax_area.set_title("Effective area vs true energy")
+            ax_area.tick_params(labelbottom=False, which='both') 
         
             # Ratio
             for i, area_eff in enumerate(area_eff_list):
@@ -490,14 +498,14 @@ def plot_trigger_efficiency_energy_camera_onshowers(
                               color=line_colors[i], linestyle=line_styles[i],
                               label=f'{names[i]} / {names[get_ratio]}')
             ax_ratio.set_xlabel("True energy [GeV]")
-            ax_ratio.set_ylabel("A_eff ratio")
+            ax_ratio.set_ylabel(r"$A_\mathrm{eff}$ ratio")
             ax_ratio.set_xscale('log')
             ax_ratio.grid(True, which="both")
             plt.tight_layout()
             if save_area:
                 plt.savefig(f"{save_area}.jpg", format="jpg", dpi=300)
-                # Guardar como EPS (vectorial)
-                plt.savefig(f"{save_area}.eps", format="eps")
+                # Guardar como PDF (vectorial)
+                plt.savefig(f"{save_area}.pdf", bbox_inches='tight')
             plt.show()
 
 def plot_trigger_efficiency_energy_camera(
