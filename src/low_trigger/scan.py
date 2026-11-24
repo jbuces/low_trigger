@@ -11,11 +11,17 @@ import numpy as np
 import tables
 from astropy.table import Table, vstack
 from ctapipe.io import read_table
+import astropy.units as u
 
 from . import rates
 
 SHOWER_SAMPLES = (15, 25)     # shower window of the gamma rays (both included)
 
+def _to_tev(column):
+    """Values of an energy column in TeV, whether it is a Column with unit or a Quantity."""
+    unit = getattr(column, "unit", None)
+    values = np.asarray(column, dtype=float)
+    return values if unit is None else (values * unit).to_value(u.TeV)
 
 def load_flower_pixels(geometry_file):
     """Pixels of each flower, shape (1141, 7), from the AdvCam trigger geometry file."""
@@ -53,7 +59,7 @@ def scan_gamma(paths, flower_pixels, t_flower=2160, tel_ids=(1, 2, 3, 4), window
     for path in paths:
         shower = read_table(path, "/simulation/event/subarray/shower")
         energy = dict(zip(zip(np.asarray(shower["obs_id"]), np.asarray(shower["event_id"])),
-                          np.asarray(shower["true_energy"].to_value("TeV"))))
+                          _to_tev(shower["true_energy"])))
         with tables.open_file(path) as h5:
             for tel_id in tel_ids:
                 name = f"/r0/event/telescope/tel_{tel_id:03d}"
