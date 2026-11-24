@@ -237,10 +237,13 @@ topological condition). The efficiency is per event, so the denominator uses `n_
 ```python
 mono = TriggerChain.l1("OR", gamma_files, nsb_files, extra_columns=("triggered_febs",))
 _, mean_febs = mean_coincident_febs(lut)
-stereo = StereoChain(mono, min_tels=2, lut=lut, topo_factor=mean_febs / 163)
+
+stereo_mult = StereoChain(mono, min_tels=2, name="OR + stereo (only time)")
+stereo_topo = StereoChain(mono, min_tels=2, lut=lut, topo_factor=mean_febs / 163, name="OR + stereo (topological)")
+
 sims_evt = SimulatedShowers("sim_energies.npz", runs=GAMMA_RUNS, n_tel=1)
-plot_efficiency([StereoChain(mono, min_tels=2), stereo], sims_evt)
-print(stereo.output_rate())     # accidental stereo NSB rate (Hz)
+plot_efficiency([stereo_mult, stereo_topo], sims_evt, ratio_to=0)    # efficiency lost with the topological condition
+print(f"NSB stereo rate: multiplicity {stereo_mult.output_rate():.0f} Hz, topological {stereo_topo.output_rate():.0f} Hz")
 ```
 
 The NSB stereo rate is analytic, from the mono output rate R of each telescope:
