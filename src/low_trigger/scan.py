@@ -71,6 +71,10 @@ def scan_gamma(paths, flower_pixels, t_flower=2160, tel_ids=(1, 2, 3, 4), window
                     stop = min(start + chunk, node.nrows)
                     wf = node.read(start, stop, field="waveform")[:, 0, :, window[0]:window[1] + 1].astype(np.int32)
                     f, a = _maxima(wf, flower_pixels, t_flower)
+                    # Maximum of each FEB in the window: flower sums (max over its 7 flowers) and amplitudes
+                    fl = wf[:, flower_pixels].sum(axis=2)
+                    feb_flower = fl.reshape(len(wf), 163, 7, -1).max(axis=(2, 3))
+                    feb_amp = np.clip(fl - t_flower, 0, None).reshape(len(wf), 163, 7, -1).sum(axis=2).max(axis=2)
                     obs = node.read(start, stop, field="obs_id")
                     evt = node.read(start, stop, field="event_id")
                     parts.append(Table({
@@ -78,6 +82,8 @@ def scan_gamma(paths, flower_pixels, t_flower=2160, tel_ids=(1, 2, 3, 4), window
                         "true_energy": [energy[(o, e)] for o, e in zip(obs, evt)],
                         "true_image_sum": images.read(start, stop, field="true_image_sum"),
                         "max_flower": f.max(axis=1), "max_amplitude": a.max(axis=1),
+                        "feb_max_flower": np.clip(feb_flower, 0, 32767).astype(np.int16),
+                        "feb_max_amplitude": np.clip(feb_amp, 0, 32767).astype(np.int16),
                     }))
     return vstack(parts)
 
@@ -120,3 +126,7 @@ class ScanChain:
 
     def output_rate(self):
         return rates.trigger_rate(self._nsb >= self.threshold)
+    
+    def triggered_febs(self):
+        """FEBs of each gamma frame that reach the threshold in the shower window, shape (n_frames, 163)."""
+        return np.asarray(self.gamma[f"feb_max_{self.kind}"]) >= self.threshold

@@ -41,7 +41,7 @@ low_trigger/
 ## Installation
 
 ```bash
-git clone git@github.com:jbuces/low_trigger.git low_trigger
+git clone <repo-url> low_trigger
 cd low_trigger
 pip install -e . --no-deps     # in an environment with numpy, scipy, pandas, matplotlib, astropy, tables, ctapipe
 ```
@@ -177,7 +177,7 @@ plot_efficiency(chains, sims, bins=bins, ratio_to=0, fit=True)              # wi
 plot_efficiency_vs_pe(chains, ratio_to=0)                                   # efficiency vs true p.e.
 plot_efficiency_vs_rate(chains, sims, energy_range=(10, 30))                # efficiency vs NSB output rate
 plot_score_distributions([cnn])                                             # CNN score, gammas and NSB
-plot_data_distribution(chains, sims, bins=bins)                             # simulated vs triggered showers
+plot_data_distribution(chains, sims, bins=bins, unit="frame")               # simulated vs triggered counts
 ```
 
 - The efficiency is the fraction of simulated telescope frames (showers × reuses × telescopes) that trigger.
@@ -185,12 +185,67 @@ plot_data_distribution(chains, sims, bins=bins)                             # si
   same shower (4 telescopes × 10 reuses) are correlated. Showers are identified by `event_id // 100`.
 - `SimulatedShowers(..., runs=...)` must contain exactly the gamma runs of the chains; otherwise an error is
   raised.
+- `plot_data_distribution(..., unit=...)` counts `"shower"` (CORSIKA showers, default), `"event"` (shower
+  reuses, i.e. array events) or `"frame"` (telescope frames, the unit of the mono efficiency).
+- `plot_efficiency(..., fit=True)` draws the data as markers and the empirical fit
+  log10(ε) = A − B (1 / (log10 E + C))^D as lines; the ratio panel uses the fits.
+- `efficiency_vs_rate` / `plot_efficiency_vs_rate`: efficiency in an energy band vs NSB output rate. CNN chains
+  give a curve (moving the CNN threshold), `ScanChain`s a curve over the OR thresholds given in
+  `or_thresholds={chain name: thresholds}`, and chains from trigger files without CNN a single point.
+
+### Energy threshold
+
+The energy threshold is the maximum of the differential gamma-ray rate for a reference spectrum,
+dR/dlog10(E) = A_eff(E) · dN/dE · E · ln 10 (Crab Nebula, MAGIC log-parabola, by default):
+
+```python
+from low_trigger.efficiency import differential_rate, energy_threshold, crab_magic, power_law
+from low_trigger.plotting import plot_differential_rate
+
+# One SimulatedShowers per chain: n_tel=4 for mono chains (A_eff per telescope), n_tel=1 for stereo chains
+thresholds = plot_differential_rate([mono, stereo_mult, stereo_topo], [sims, sims_evt, sims_evt],
+                                    fit=True, normalize=True)                  # {chain name: E_th (GeV)}
+plot_differential_rate(chains, sims, spectrum=power_law(2.6), fit=True)
+```
+
+With `fit=True` the effective area comes from the empirical fit, so the maximum is well defined even with
+limited statistics; with `fit=False` the binned values are used (check that both give the same peak).
+
+### Trigger rate vs threshold (bias curves)
+
+NSB rate (steep) and cosmic-ray rate (shallow) vs the threshold of the chain, mono or after the stereo trigger:
+
+```python
+from low_trigger.plotting import plot_rate_vs_threshold, plot_stereo_rate_vs_threshold
+
+plot_rate_vs_threshold(or_scan, sims, thresholds=range(2190, 2260, 2), light_factor=3)      # mono, per telescope
+plot_stereo_rate_vs_threshold(or_scan, sims_evt, range(2190, 2260, 2), lut=lut, light_factor=3)   # array
+
+# CNN: scan the CNN threshold (the rates increase with it, since frames are accepted below it)
+p = np.asarray(cnn.nsb["cnn_prediction"], dtype=float)
+cnn_thresholds = np.quantile(p[np.isfinite(p)], np.linspace(0.002, 1.0, 30))
+plot_stereo_rate_vs_threshold(cnn, sims_evt, cnn_thresholds, lut=lut, xlabel="CNN threshold (NSB score)",
+                              light_factor=3)
+```
+
+The cosmic-ray rate is R = Σ ε(E) · A_sim · Ω · J(E) · ΔE with the proton spectrum J(E) (BESS, as used in CTA):
+
+- **With gamma rays as a proxy** (`light_factor=3`, Ω = solid angle of the field of view, 2.25° radius by
+  default): a proton of energy E is assumed to produce as much Cherenkov light as a gamma ray of energy E/3.
+  Rough estimate only (on-axis gamma rays, CNN not trained on hadrons).
+- **With simulated protons:** build the chain and `SimulatedShowers` from the proton files and use
+  `light_factor=1` and `solid_angle_sr=cone_solid_angle(<view cone radius>)`.
+
+For the stereo curves, the stereo chain is rebuilt for every threshold, so the topological condition needs the
+triggered FEBs for each threshold: `ScanChain` provides them from the per-FEB maxima of the scan, and chains
+from trigger files read the `triggered_febs` column (with `extra_columns=("triggered_febs",)`).
 
 ### Threshold scans from the R0 waveforms (`scan.py`)
 
 A single pass over the waveforms stores, per frame, the maximum flower sum (Boolean OR) and the maximum FEB
-amplitude (amplitude-aware OR). Any OR threshold can then be applied without generating trigger files. Needs
-access to the R0 files.
+amplitude (amplitude-aware OR), over the camera and for each FEB (in the shower window for gamma rays). Any
+OR threshold can then be applied without generating trigger files, including the triggered FEBs needed by the
+topological stereo trigger. Needs access to the R0 files.
 
 ```python
 from low_trigger.scan import (load_flower_pixels, scan_nsb, scan_gamma, rates_vs_threshold,
@@ -201,12 +256,15 @@ nsb_scan = scan_nsb(NSB_R0_FILES, fp, t_flower=2160)
 gamma_scan = scan_gamma(GAMMA_R0_FILES, fp, t_flower=2160)
 
 thr, rate = threshold_for_rate(nsb_scan["flower"], range(2180, 2260), target_hz=2e6)
-or_scan = ScanChain("OR (scan)", gamma_scan, nsb_scan, "flower", thr)       # behaves like a chain
-plot_efficiency_vs_rate([or_scan, cnn], sims, or_thresholds={"OR (scan)": range(2200, 2240)})
+or_scan = ScanChain("Boolean OR", gamma_scan, nsb_scan, "flower", thr)      # behaves like a chain
+plot_efficiency_vs_rate([or_scan, cnn], sims, or_thresholds={"Boolean OR": range(2200, 2240)})
 ```
 
-Below the maximum of the rate-vs-threshold curve the OR is almost always on and the onset rate is not
-meaningful; `threshold_for_rate` only searches above that maximum.
+The threshold given to `ScanChain` is its operating threshold (used by the efficiency and plotting
+functions); the functions that scan thresholds restore it at the end. Below the maximum of the
+rate-vs-threshold curve the OR is almost always on and the onset rate is not meaningful;
+`threshold_for_rate` only searches above that maximum. The scan reproduces exactly the trigger files
+(same rate, frames and efficiency for the Boolean OR 2221).
 
 ### Stereo trigger (`stereo.py`)
 
@@ -232,14 +290,14 @@ plot_feb_coincidences(counts, 1, 2, feb=60, geometry=geom)   # visual check of o
 ```
 
 **Stereo chains.** Built on any mono chain (read with `extra_columns=("triggered_febs",)` for the
-topological condition). The efficiency is per event, so the denominator uses `n_tel=1`:
+topological condition, or a `ScanChain`). With a look-up table, the topological factor f (mean coincident
+FEBs / 163) is computed from the table itself. The efficiency is per event, so the denominator uses `n_tel=1`:
 
 ```python
 mono = TriggerChain.l1("OR", gamma_files, nsb_files, extra_columns=("triggered_febs",))
-_, mean_febs = mean_coincident_febs(lut)
 
-stereo_mult = StereoChain(mono, min_tels=2, name="OR + stereo (only time)")
-stereo_topo = StereoChain(mono, min_tels=2, lut=lut, topo_factor=mean_febs / 163, name="OR + stereo (topological)")
+stereo_mult = StereoChain(mono, min_tels=2, name="OR + stereo (multiplicity)")
+stereo_topo = StereoChain(mono, min_tels=2, lut=lut, name="OR + stereo (topological)")
 
 sims_evt = SimulatedShowers("sim_energies.npz", runs=GAMMA_RUNS, n_tel=1)
 plot_efficiency([stereo_mult, stereo_topo], sims_evt, ratio_to=0)    # efficiency lost with the topological condition
@@ -267,6 +325,10 @@ with n telescopes, k required, τ the coincidence half window (20 ns) and f the 
   denominator comes from `sim_energies.npz`, not from the stored frames.
 - **Training vs test:** gamma runs 110–127 and NSB runs 1–7 for training; gamma runs 1–50 and NSB runs
   21–25 for test (independent runs, so all reuses of a shower are in the same sample).
+- **`triggered_febs`:** trigger files made before the `-fw` option store the FEBs triggered in the whole
+  40-sample frame; current ones only those in the shower window (samples 15–25).
+- **Pixel numbering:** the 7 pixels of each flower and the 7 flowers (49 pixels) of each FEB are consecutive,
+  so pixel p belongs to flower p // 7 and FEB p // 49.
 
 ## Reference values (NSB 268 MHz/pixel, NSB runs 21–25)
 
@@ -283,3 +345,12 @@ Trigger (onset) rate of the OR for the thresholds used in the trigger studies.
 | threshold | 2200 | 2202 | 2204 | 2208 | 2209 | 2213 | 2215 | 2216 | 2220 | 2221 |
 |---|---|---|---|---|---|---|---|---|---|---|
 | rate (MHz) | 35.4 | 27.5 | 21.2 | 12.4 | 10.8 | 6.2 | 4.7 | 4.1 | 2.3 | 1.97 |
+
+**Stereo trigger** (Boolean OR 2221, mono output 1.97 MHz per telescope, 2 of 4 telescopes, τ = 20 ns;
+FEB coincidences from on-axis gamma rays, runs 110–130):
+
+| Condition | Mean coincident FEBs | Topological factor | NSB stereo rate |
+|---|---|---|---|
+| Multiplicity only | – | 1 | 931 kHz |
+| Topological, threshold 0 | 32.3 | 0.198 | 184 kHz |
+| Topological, threshold 5% | 5.35 | 0.033 | 31 kHz |

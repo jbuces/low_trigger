@@ -54,8 +54,10 @@ class StereoChain:
     """
     has_cnn = False
 
-    def __init__(self, mono, min_tels=2, lut=None, topo_factor=1.0, n_tels=4, window_ns=20.0, name=None):
+    def __init__(self, mono, min_tels=2, lut=None, topo_factor=None, n_tels=4, window_ns=20.0, name=None):
         self.mono, self.min_tels, self.lut = mono, min_tels, lut
+        if lut is not None and topo_factor is None:
+            topo_factor = mean_coincident_febs(lut)[1] / N_FEB        # from the look-up table itself
         self.topo_factor, self.n_tels, self.window_ns = topo_factor, n_tels, window_ns
         self.name = name or f"{mono.name} + stereo {min_tels}{' topo' if lut is not None else ''}"
 
@@ -68,13 +70,17 @@ class StereoChain:
         triggered = (table["n_trig"] >= min_tels).to_numpy()
 
         if lut is not None:
-            if "triggered_febs" not in g.colnames:
+            if hasattr(mono, "triggered_febs"):                       # ScanChain: FEBs for the current threshold
+                febs = mono.triggered_febs()
+            elif "triggered_febs" in g.colnames:                      # trigger files
+                febs = np.asarray(g["triggered_febs"]).astype(bool)
+            else:
                 raise ValueError("The topological trigger needs the 'triggered_febs' column in the trigger files.")
-            febs = np.asarray(g["triggered_febs"]).astype(bool)          # (n_frames, 163)
-            frames = df[df["trig"]].groupby(["obs_id", "event_id"]).indices
+            trig_pos = np.flatnonzero(df["trig"].to_numpy())               # positions of the triggered frames
+            frames = df.iloc[trig_pos].groupby(["obs_id", "event_id"]).indices
             for row in np.flatnonzero(triggered):
                 key = (table["obs_id"].iat[row], table["event_id"].iat[row])
-                idx = frames[key]
+                idx = trig_pos[frames[key]]                                 # back to positions in the full table
                 tels = df["tel_id"].to_numpy()[idx]
                 involved = set()
                 for a in range(len(idx)):
@@ -111,3 +117,20 @@ def lut_summary(counts, thresholds=(0.0, 0.00065, 0.01, 0.05)):
 def save_feb_lut(lut, path):
     """Save a look-up table (one allowed matrix (163, 163) per telescope pair) as a .npz file."""
     np.savez(path, **{f"{t1}_{t2}": allowed for (t1, t2), allowed in lut.items()})
+
+def stereo_rate_vs_threshold(mono, sims_evt, bins, thresholds, min_tels=2, lut=None, **cosmic_kwargs):
+    """
+    Stereo NSB rate and cosmic-ray rate (Hz, per array event) for a range of thresholds of the mono chain:
+    for each threshold the stereo chain (multiplicity, or topological with ``lut``) is rebuilt.
+    ``sims_evt`` must use n_tel=1. ``cosmic_kwargs`` are passed to ``cosmic_ray_rate``.
+    """
+    from .efficiency import cosmic_ray_rate
+    saved = mono.threshold
+    nsb, cosmic = [], []
+    for thr in thresholds:
+        mono.threshold = thr
+        st = StereoChain(mono, min_tels=min_tels, lut=lut)
+        nsb.append(st.output_rate())
+        cosmic.append(cosmic_ray_rate(st, sims_evt, bins, **cosmic_kwargs))
+    mono.threshold = saved
+    return np.asarray(thresholds, dtype=float), np.array(nsb), np.array(cosmic)

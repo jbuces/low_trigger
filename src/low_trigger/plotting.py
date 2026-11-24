@@ -5,8 +5,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
-from .efficiency import energy_bins, efficiency_vs_energy, efficiency_vs_pe, efficiency_vs_rate, efficiency_model, fit_efficiency 
-
+from .efficiency import (energy_bins, efficiency_vs_energy, efficiency_vs_pe, efficiency_vs_rate,
+                         efficiency_model, fit_efficiency, differential_rate, energy_threshold,
+                         crab_magic, rate_vs_threshold)
 PAPER_STYLE = {
     "text.usetex": False, "font.family": "serif", "mathtext.fontset": "cm",
     "axes.formatter.use_mathtext": True, "font.size": 18, "axes.titlesize": 18,
@@ -157,24 +158,32 @@ def plot_score_distributions(chains, save=None):
     plt.show()
 
 
-def plot_data_distribution(chains, sims, bins=None, save=None):
-    """Simulated showers per energy bin and showers with at least one triggered frame for each chain."""
+def plot_data_distribution(chains, sims, bins=None, unit="event", save=None):
+    """
+    Simulated and triggered counts per energy bin. ``unit``:
+    - 'shower': CORSIKA showers (triggered: at least one triggered frame among all reuses and telescopes);
+    - 'event': shower reuses, i.e. array events (triggered: at least one triggered telescope);
+    - 'frame': telescope frames (simulated: showers x reuses x telescopes).
+    """
     bins = energy_bins() if bins is None else bins
     centers = np.sqrt(bins[:-1] * bins[1:])
+    factor = {"shower": 1, "event": sims.reuse, "frame": sims.reuse * sims.n_tel}[unit]
     with plt.rc_context(PAPER_STYLE):
         fig, ax = plt.subplots(figsize=(10, 6))
-        ax.step(centers, sims.counts(bins), where="mid", lw=2, linestyle="--", color="k", label="Simulated")
+        ax.step(centers, sims.counts(bins) * factor, where="mid", lw=2, linestyle="--", color="k", label="Simulated")
         for i, c in enumerate(chains):
             t = c.gamma
             trig = c.gamma_triggered()
-            showers = np.unique(np.stack([np.asarray(t["obs_id"])[trig],
-                                          np.asarray(t["event_id"])[trig] // 100], axis=1), axis=0, return_index=True)[1]
-            energy = np.asarray(t["true_energy"])[trig][showers] * 1e3
+            energy = np.asarray(t["true_energy"])[trig] * 1e3
+            if unit != "frame":
+                key = np.asarray(t["event_id"])[trig] // (100 if unit == "shower" else 1)
+                _, first = np.unique(np.stack([np.asarray(t["obs_id"])[trig], key], axis=1), axis=0, return_index=True)
+                energy = energy[first]
             ax.step(centers, np.histogram(energy, bins=bins)[0], where="mid", lw=2, color=f"C{i}", label=c.name)
         ax.set_xscale("log")
         ax.set_yscale("log")
         ax.set_xlabel("True energy [GeV]")
-        ax.set_ylabel("Showers")
+        ax.set_ylabel({"shower": "Showers", "event": "Events", "frame": "Telescope frames"}[unit])
         ax.grid(True, which="both", alpha=0.4)
         ax.legend(fontsize=12)
         fig.tight_layout()
@@ -203,3 +212,83 @@ def plot_feb_coincidences(counts, t1, t2, feb, geometry, save=None):
     if save:
         fig.savefig(f"{save}.pdf", bbox_inches="tight")
     plt.show()
+
+
+def plot_differential_rate(chains, sims, bins=None, spectrum=None, fit=False, normalize=False,
+                           colors=None, styles=None, save=None):
+    """
+    Differential gamma-ray trigger rate (per decade of energy) for a reference spectrum, and the energy
+    threshold (maximum) of each chain. ``sims`` can be a list with one SimulatedShowers per chain
+    (e.g. n_tel=4 for mono chains, n_tel=1 for stereo chains). With ``normalize``, each curve is scaled
+    to its maximum, to compare the shapes.
+    """
+    bins = energy_bins(e_max=1e4) if bins is None else bins
+    spectrum = crab_magic if spectrum is None else spectrum
+    sims_list = sims if isinstance(sims, (list, tuple)) else [sims] * len(chains)
+    thresholds = {}
+    with plt.rc_context(PAPER_STYLE):
+        fig, ax = plt.subplots(figsize=(10, 7))
+        for i, (chain, s) in enumerate(zip(chains, sims_list)):
+            x, rate, err = differential_rate(chain, s, bins, spectrum, fit=fit)
+            e_thr = energy_threshold(x, rate)
+            thresholds[chain.name] = e_thr
+            scale = 1.0 / rate.max() if normalize else 1.0
+            color = colors[i] if colors else f"C{i}"
+            style = styles[i] if styles else "solid"
+            label = f"{chain.name}: $E_\\mathrm{{th}}$ = {e_thr:.0f} GeV"
+            if fit:
+                ax.plot(x, rate * scale, color=color, linestyle=style, label=label)
+            else:
+                ax.errorbar(x, rate * scale, yerr=err * scale, color=color, linestyle=style, capsize=2, label=label)
+            ax.axvline(e_thr, color=color, linestyle=":", alpha=0.7)
+        ax.set_xscale("log")
+        ax.set_xlabel("True energy [GeV]")
+        ax.set_ylabel("Normalised rate" if normalize else r"$dR/d\log_{10}E$ [Hz]")
+        ax.grid(True, which="both", alpha=0.4)
+        ax.legend(fontsize=12)
+        fig.tight_layout()
+        if save:
+            for fmt in ("jpg", "pdf"):
+                fig.savefig(f"{save}.{fmt}", dpi=300, bbox_inches="tight")
+        plt.show()
+    return thresholds
+
+def _plot_bias(thr, nsb, cosmic, operating, title, xlabel, save):
+    with plt.rc_context(PAPER_STYLE):
+        fig, ax = plt.subplots(figsize=(9, 7))
+        ax.plot(thr, nsb, label="NSB")
+        ax.plot(thr, cosmic, label="Cosmic rays")
+        ax.plot(thr, nsb + cosmic, color="k", linestyle="--", label="Total")
+        if operating is not None:
+            ax.axvline(operating, color="k", linestyle=":", label="Operating threshold")
+        ax.set_yscale("log")
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("Trigger rate [Hz]")
+        ax.set_title(title, fontsize=14)
+        ax.grid(True, which="both", alpha=0.4)
+        ax.legend()
+        fig.tight_layout()
+        if save:
+            for fmt in ("jpg", "pdf"):
+                fig.savefig(f"{save}.{fmt}", dpi=300, bbox_inches="tight")
+        plt.show()
+
+
+def plot_rate_vs_threshold(chain, sims, bins=None, thresholds=None, xlabel=None, save=None, **cosmic_kwargs):
+    """Mono trigger rate vs threshold ('bias curve'): NSB, cosmic rays and their sum."""
+    bins = energy_bins(e_max=1e4) if bins is None else bins
+    thr, nsb, cosmic = rate_vs_threshold(chain, sims, bins, thresholds, **cosmic_kwargs)
+    _plot_bias(thr, nsb, cosmic, chain.threshold, chain.name,
+               xlabel or ("CNN threshold (NSB score)" if chain.has_cnn else "OR threshold"), save)
+    return thr, nsb, cosmic
+
+
+def plot_stereo_rate_vs_threshold(mono, sims_evt, thresholds, bins=None, min_tels=2, lut=None, title=None,
+                                  xlabel="OR threshold", save=None, **cosmic_kwargs):
+    """Array trigger rate vs threshold of the mono chain, after the stereo (multiplicity or topological) trigger."""
+    from .stereo import stereo_rate_vs_threshold
+    bins = energy_bins(e_max=1e4) if bins is None else bins
+    thr, nsb, cosmic = stereo_rate_vs_threshold(mono, sims_evt, bins, thresholds, min_tels, lut, **cosmic_kwargs)
+    kind = "topological" if lut is not None else "multiplicity"
+    _plot_bias(thr, nsb, cosmic, mono.threshold, title or f"{mono.name} + stereo ({kind})", xlabel, save)
+    return thr, nsb, cosmic
